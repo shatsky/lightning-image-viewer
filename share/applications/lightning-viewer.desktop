@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Lightning Image Viewer
+Exec=lightning-image-viewer %F
+Type=Application
+Terminal=false
+Categories=Graphics;
+MimeType=image/bmp;image/gif;image/jpeg;image/png;image/webp;
