@@ -149,6 +149,10 @@ void init(struct State *state) {
         SDL_VideoQuit();
         exit(1);
     }
+
+// TODO shaped window seems broken on Windows, other platforms?
+#ifndef _WIN32
+
     state->window = SDL_CreateShapedWindow("Lightning Image Viewer",
         0, 0,
         display_mode.w, display_mode.h,
@@ -156,16 +160,23 @@ void init(struct State *state) {
     // fallback on usual window
     if(state->window == NULL) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_CreateShapedWindow failed");
+
+#else
+
+    if(1) {
+
+#endif
+
         state->window = SDL_CreateWindow("Lightning Image Viewer",
             0, 0,
             display_mode.w, display_mode.h,
             0);
-            if(state->window == NULL) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_CreateWindow failed");
-                SDL_VideoQuit();
-                exit(-1);
-            }
+        if(state->window == NULL) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_CreateWindow failed");
+            SDL_VideoQuit();
+            exit(-1);
         }
+    }
     
     state->renderer = SDL_CreateRenderer(state->window, -1, 0);
     
