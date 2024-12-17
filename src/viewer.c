@@ -129,8 +129,8 @@ void handle_move(struct State *state, int cur_win_x, int cur_win_y) {
 
 void handle_scroll(struct State *state, int cur_win_x, int cur_win_y, char up) {
     // calculate new viewbox size and position
-    int cur_img_x = (cur_win_x - state->box_in_window_rect.x) / state->scale;
-    int cur_img_y = (cur_win_y - state->box_in_window_rect.y) / state->scale;
+    int cur_img_x = (cur_win_x - state->box_in_window_rect.x) / state->scale + 0.5;
+    int cur_img_y = (cur_win_y - state->box_in_window_rect.y) / state->scale + 0.5;
     up ? state->zoom_level++ : state->zoom_level--;
     state->scale = get_scale(state->zoom_level);
     state->box_in_window_rect.w = state->img_w * state->scale;
