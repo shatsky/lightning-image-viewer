@@ -29,11 +29,12 @@ Note: nixpkgs has concept of 3 platforms:
 - "buildPlatform" (on which program is to be built, i. e. on which Nix runs)
 - "hostPlatform" (on which built program is to be executed)
 - "targetPlatform" (for which built program emits code, only relevant for compilers)
+
 On x86_64 NixOS:
 - for any pkg, buildPlatform is "x86_64-linux" (overriding it doesn't make sense)
 - for "usual" pkgs (which are to be executed on same platform), hostPlatform is also "x86_64-linux"
 - for pkgs in `pkgsCross.mingwW64` set, hostPlatform is "x86_64-w64-mingw32"
-- for pkgs in `pkgsCross.mingwW64.pkgsBuildHost` set, hostPlatform is "x86_64-linux", targetPlatform is "i686-w64-mingw32" (`pkgs<host><target>` pkgs sets have overridden "host" and "target" platforms, in case of `pkgsBuildHost` hostPlatform -> buildPlatform, targetPlatform -> hostPlatform)
+- for pkgs in `pkgsCross.mingwW64.pkgsBuildHost` set, hostPlatform is "x86_64-linux", targetPlatform is "x86_64-w64-mingw32" (`pkgs<host><target>` pkgs sets have overridden "host" and "target" platforms, in case of `pkgsBuildHost` hostPlatform -> buildPlatform, targetPlatform -> hostPlatform)
 
 Note: "x86_64-w64-mingw32" and "x86_64-linux" are "target triplets" describing target for which compiler produces binary, see https://wiki.osdev.org/Target_Triplet
 
