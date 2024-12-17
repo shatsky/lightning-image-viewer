@@ -63,18 +63,9 @@ void render_window(struct State *state) {
     SDL_SetWindowShape(state->window, state->window_shape_surface, &(SDL_WindowShapeMode){.mode=ShapeModeDefault});
     
     SDL_RenderClear(state->renderer); // default black
-    // copy appropriate area of image to appropriate area of renderer backbuffer
-    SDL_Rect image_in_window_rect_src;
-    image_in_window_rect_src.x = state->box_in_window_rect.x>0 ? 0 : -state->box_in_window_rect.x/state->scale;
-    image_in_window_rect_src.y = state->box_in_window_rect.y>0 ? 0 : -state->box_in_window_rect.y/state->scale;
-    image_in_window_rect_src.w = state->img_w - image_in_window_rect_src.x;
-    image_in_window_rect_src.h = state->img_h - image_in_window_rect_src.y;
-    SDL_Rect image_in_window_rect_dst;
-    image_in_window_rect_dst.x = state->box_in_window_rect.x<0 ? 0 : state->box_in_window_rect.x;
-    image_in_window_rect_dst.y = state->box_in_window_rect.y<0 ? 0 : state->box_in_window_rect.y;
-    image_in_window_rect_dst.w = state->box_in_window_rect.x<0 ? state->box_in_window_rect.x+state->box_in_window_rect.w : state->box_in_window_rect.w;
-    image_in_window_rect_dst.h = state->box_in_window_rect.y<0 ? state->box_in_window_rect.y+state->box_in_window_rect.h : state->box_in_window_rect.h;
-    SDL_RenderCopy(state->renderer, state->image_texture, &image_in_window_rect_src, &image_in_window_rect_dst);
+    // copy image to presentation area in renderer backbuffer
+    // TODO ensure that clipping is done correctly without overhead
+    SDL_RenderCopy(state->renderer, state->image_texture, NULL, &state->box_in_window_rect);
     // copy renderer backbuffer to frontbuffer
     SDL_RenderPresent(state->renderer);
 }
