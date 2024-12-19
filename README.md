@@ -1,27 +1,29 @@
 # Lightning Image Viewer
 
-This is a simple minimalistic lightweight image viewer with UX optimized for workflow with common file managers, mouse & non-retina display, replicating image viewing UX of some websites:
+This is a simple minimalistic lightweight image viewer with UX optimized for mouse workflow with common file managers and non-retina displays, replicating image viewing UX of some websites:
 
-- maximized shaped (if available) borderless window
+- maximized transparent borderless window
 - zoom with wheel (geometric series with 2^(1/2) multiplier)
 - drag with left mouse button pressed
 - close with left mouse button click (if no drag nor zoom were performed between button press and release events)
 
-This results in minimal required movements and distraction when opening random images from file manager, zooming into some detail and closing them.
+I. e. it feels like window is always sized and placed as current image presentation area, resizes and moves automatically when zooming and dragging image, and clicking on it anywhere closes it; resulting in minimal required movements and distraction when opening random images from file manager, zooming into some detail and closing them.
 
-Implemented with SDL2 and SDL2_image.
+Implemented in C with SDL3 and SDL3_image.
 
 ## Building
 
-You can use Nix expression to build&install with Nix (via `nix-env -i -f default.nix`), or use it as a reference to build&install manually (this is currently a single file project).
-SDL2 currently has an issue with window shaping on X11 (not sure about other supported platforms): on repeated SDL_SetWindowShape() shape bitmask isn't cleared, so pixel which has became opaque cannot become transparent again (will stay black, as that's default color for clearing SDL2 render buffer). Nix expression builds custom SDL2 with micro patch fixing this.
+You can use Nix expression to build&install with Nix (via `nix-env -i -f default.nix`), or use it as a reference to build&install manually (this is currently a single file project, see buildPhase in derivation.nix).
+
+Note: Nix expression tested against stable nixpkgs 24.11, broken against previous 24.05 (SDL3 is not even in 24.11 yet, so I copied Nix expression for SDL3 from open PR which depends on nixpkgs changes added between these)
 
 ### Building for Windows
 
-This is how I currently build self-sufficient Windows binary on NixOS:
+This is how I currently build Windows binary on NixOS:
 - env with x86_64-w64-mingw32-gcc: `nix-shell -p pkgsCross.mingwW64.pkgsBuildHost.gcc`
-- download and extract https://github.com/libsdl-org/SDL/releases/download/release-2.30.9/SDL2-devel-2.30.9-mingw.tar.gz and https://github.com/libsdl-org/SDL/releases https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.2/SDL2_image-devel-2.8.2-mingw.tar.gz
-- build cmd (hacked this together with help of chatgpt without full understanding of Windows-specific opts, will leave here for now): `x86_64-w64-mingw32-gcc -v src/viewer.c -ISDL2-2.30.9/x86_64-w64-mingw32/include/SDL2 -ISDL2_image-2.8.2/x86_64-w64-mingw32/include/SDL2 -LSDL2-2.30.9/x86_64-w64-mingw32/lib -LSDL2_image-2.8.2/x86_64-w64-mingw32/lib -lmingw32 -l:libSDL2main.a -l:libSDL2.a -l:libSDL2_image.a -lwinmm -ldxguid -lsetupapi -lole32 -limm32 -lversion -loleaut32 -mwindows`
+- download and extract https://github.com/libsdl-org/SDL/releases/download/preview-3.1.6/SDL3-devel-3.1.6-mingw.tar.gz and https://github.com/libsdl-org/SDL_image/releases/download/preview-3.1.0/SDL3_image-devel-3.1.0-mingw.zip
+- build cmd: `x86_64-w64-mingw32-gcc src/viewer.c -ISDL3-3.1.6/x86_64-w64-mingw32/include -ISDL3_image-3.1.0/x86_64-w64-mingw32/include -LSDL3-3.1.6/x86_64-w64-mingw32/lib -LSDL3_image-3.1.0/x86_64-w64-mingw32/lib -l:libSDL3.dll.a -l:libSDL3_image.dll.a -mwindows`
+- put SDL3-3.1.6/x86_64-w64-mingw32/bin/SDL3.dll and SDL3_image-3.1.0/x86_64-w64-mingw32/bin/SDL3_image.dll in same dir with binary
 
 Note: it might be possible to have unified Nix expr for cross building without using pre-built SDL, but `pkgsCross.mingwW64.SDL2_image` currently fails to build (seems that most pkgs are broken for mingwW64, though SDL2 itself builds successfully)
 
@@ -40,6 +42,5 @@ Note: "x86_64-w64-mingw32" and "x86_64-linux" are "target triplets" describing t
 
 ## Main issues:
 
-- ~1% of images (which are viewable in common browsers) fail to load (SDL2_image fails to recognize format, probably not designed to decode malformed images)
+- (may be not true anymore, need to test after move to SDL3_image) ~1% of images (which are viewable in common browsers) fail to load (SDL2_image IMG_Load fails, probably lacks internal error handling for malformed images)
 - EXIF rotation info is not supported
-- Window shape is not updated sometimes on X11, on Wayland (Weston) it doesn't work at all (falls back to usual fullscreen window with black backround, window shaping is not implemented in SDL2 for Wayland, thought it seems possible to implement with wl_surface_set_input_region)
