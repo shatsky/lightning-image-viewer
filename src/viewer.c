@@ -106,6 +106,8 @@ void load_image(struct State *state, char *filepath) {
     // TODO free previous texture?
     state->image_texture = SDL_CreateTextureFromSurface(state->renderer, state->image_surface);
     SDL_DestroySurface(state->image_surface);
+    // TODO default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect rendering at zoom level 0 (1:1 scale)
+    SDL_SetTextureScaleMode(state->image_texture, SDL_SCALEMODE_NEAREST);
 }
 
 // non-redrawing, only update scale and view_rect size
@@ -113,6 +115,10 @@ void set_zoom_level(struct State* state, int view_zoom_level) {
     state->view_zoom_level = view_zoom_level;
     // scale = sqrt(2)^zoom_level = 2^(0.5*zoom_level)
     state->view_zoom_scale = pow(2, 0.5 * view_zoom_level);
+    // TODO tried to get pixel perfect rendering at integer scales with SDL_SCALEMODE_LINEAR, does not help
+    //if (view_zoom_level%2 == 0) {
+    //    state->view_zoom_scale = 1 << (view_zoom_level / 2);
+    //}
     state->view_rect.w = state->img_w * state->view_zoom_scale;
     state->view_rect.h = state->img_h * state->view_zoom_scale;
 }
