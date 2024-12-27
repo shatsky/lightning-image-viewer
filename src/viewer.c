@@ -1,6 +1,6 @@
 /* 
  * Lightning Image Viewer
- * Copyright (c) 2015 Eugene Shatsky
+ * Copyright (c) 2021 Eugene Shatsky
  * 
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,105 +22,215 @@
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 
-// TODO don't drag or zoom if cursor out of img
-// TODO ensure that at zoom_level = 0 scale is precisely 1.
+// design
+// - state obj holds most of global state incl. view_rect
+// - view_* functions update view via render_window()
+// - event loop in main()
+
+// TODO don't drag or zoom if cursor out of view_rect?
+// TODO scale/position limits/constraints?
+// TODO ensure that at zoom_level = 0 scale is precisely 1 and rendering is pixel perfect
 // TODO ensure that during scroll zoom same image pixel remains under cursor
-// TODO create window after image is loaded (but window has to exist when image texture is created?)
-// TODO is it nessessary to call SDL_DestroyWindow() or smth else before exit()?
-// TODO display GUI error msgs
+// TODO create window after image is loaded? (but window has to exist when image texture is created?)
+// TODO display GUI error msgs?
+// TODO ensure SDL functions error handling
+// TODO ensure SDL heap-allocated resources freeing (maybe not for process-lifelong, but image reloading can make some of them limited-liftime)
+// TODO is it nessessary to call SDL_DestroyWindow() or smth else before exit()? See also SDL_Quit(), atexit()
 
 struct State {
-    int zoom_level;
-    float scale;
-    SDL_Window *window;
-    SDL_Renderer *renderer;
-    float mv_initial_box_x;
-    float mv_initial_box_y;
-    float mv_initial_ptr_x;
-    float mv_initial_ptr_y;
-    // viewbox size (absolute) and offset (relative to window)
-    SDL_FRect box_in_window_rect;
+    // cur x, y: coords of current point (under cursor)
+    // pre mv: at start of move (drag) action
+    int display_count;
+    SDL_DisplayID* displays;
+    const SDL_DisplayMode* display_mode;
+    SDL_Window* window;
+    int win_w;
+    int win_h;
+    float win_cur_x;
+    float win_cur_y;
+    float win_pre_mv_cur_x;
+    float win_pre_mv_cur_y;
+    char win_fullscreen;
+    SDL_Renderer* renderer;
+    SDL_Surface* image_surface;
+    SDL_Texture* image_texture;
     int img_w;
     int img_h;
-    SDL_Texture *image_texture;
+    float img_cur_x;
+    float img_cur_y;
+    // image presentation area size and position (coords of top left corner relative to window)
+    SDL_FRect view_rect;
+    int view_zoom_level; // 0 is for 1:1
+    float view_zoom_scale;
+    float view_rect_pre_mv_x;
+    float view_rect_pre_mv_y;
 };
 
+// set default state values and get ready for loading image and calling view_* functions
+void init_state(struct State* state) {
+    // TODO current display in multi monitor setup?
+    // TODO does it make sense that SDL requires window size with SDL_WINDOW_MAXIMIZED?
+    if (!SDL_Init(SDL_INIT_VIDEO)){
+        SDL_Log("SDL_Init failed: %s", SDL_GetError());
+        exit(1);
+    }
+    state->displays = SDL_GetDisplays(&state->display_count); // free:
+    if(!state->display_count) {
+        SDL_Log("SDL_GetDisplays failed: %s", SDL_GetError());
+        exit(1);
+    }
+    state->display_mode = SDL_GetDesktopDisplayMode(state->displays[0]); // free:
+    if (NULL==state->display_mode) {
+        SDL_Log("SDL_GetDesktopDisplayMode failed: %s", SDL_GetError());
+        exit(1);
+    }
+    if (!SDL_CreateWindowAndRenderer("Lightning Image Viewer", state->display_mode->w, state->display_mode->h, SDL_WINDOW_BORDERLESS|SDL_WINDOW_MAXIMIZED|SDL_WINDOW_TRANSPARENT, &state->window, &state->renderer)) {
+        SDL_Log("SDL_CreateWindowAndRenderer failed: %s", SDL_GetError());
+        exit(1);
+    }
+    state->win_fullscreen = false;
+}
+
+void load_image(struct State *state, char *filepath) {
+    // decode image into surface, get its dimensions and create texture from it
+    // SDL surface is in RAM, texture is in VRAM (and uses less CPU for processing)
+    // IMG_LoadTexture() creates tmp surface, too
+    //state->image_texture = IMG_LoadTexture(state->renderer, filepath);
+    state->image_surface = IMG_Load(filepath);
+    if (NULL == state->image_surface) {
+        SDL_Log("IMG_Load failed");
+        exit(1);
+    }
+    state->img_w = state->image_surface->w;
+    state->img_h = state->image_surface->h;
+    // TODO free previous texture?
+    state->image_texture = SDL_CreateTextureFromSurface(state->renderer, state->image_surface);
+    SDL_DestroySurface(state->image_surface);
+}
+
+// non-redrawing, only update scale and view_rect size
+void set_zoom_level(struct State* state, int view_zoom_level) {
+    state->view_zoom_level = view_zoom_level;
+    // scale = sqrt(2)^zoom_level = 2^(0.5*zoom_level)
+    state->view_zoom_scale = pow(2, 0.5 * view_zoom_level);
+    state->view_rect.w = state->img_w * state->view_zoom_scale;
+    state->view_rect.h = state->img_h * state->view_zoom_scale;
+}
+
+// redraw window contents with current state
 void render_window(struct State *state) {
-    SDL_RenderClear(state->renderer); // default black (transparent for transparent window)
+    SDL_RenderClear(state->renderer);
     // copy image to presentation area in renderer backbuffer
     // TODO ensure that clipping is done correctly without overhead
-    SDL_RenderTexture(state->renderer, state->image_texture, NULL, &state->box_in_window_rect);
+    SDL_RenderTexture(state->renderer, state->image_texture, NULL, &state->view_rect);
     // copy renderer backbuffer to frontbuffer
     SDL_RenderPresent(state->renderer);
 }
 
-float get_scale(int zoom_level) {
-    return pow(0.5, 0.5*(-zoom_level));
-}
-
-void load_image(struct State *state, char *filepath) {
-    // SDL surface is in RAM, texture is in VRAM (and uses less CPU for processing)
-    // IMG_LoadTexture() creates tmp surface, too
-    //state->image_texture = IMG_LoadTexture(state->renderer, filepath);
-    SDL_Surface *image_surface = IMG_Load(filepath);
-    if (NULL == image_surface) {
-        SDL_Log("IMG_Load failed");
-        exit(1);
+// reset view_rect to initial scale and position
+void view_reset(struct State* state) {
+    // calculate max zoom level to fit whole image
+    SDL_GetWindowSize(state->window, &state->win_w, &state->win_h);
+    // zoom_level = 2*log2(scale)
+    set_zoom_level(state, floor(2 * log2((float)state->win_h / state->img_h)));
+    if (state->img_w*state->view_zoom_scale > state->win_w) {
+        set_zoom_level(state, floor(2 * log2((float)state->win_w / state->img_w)));
     }
-    state->img_w = image_surface->w;
-    state->img_h = image_surface->h;
-    // TODO free previous texture?
-    state->image_texture = SDL_CreateTextureFromSurface(state->renderer, image_surface);
-    SDL_DestroySurface(image_surface);
-    // decode image into surface and get its dimensions
-    // calculate initial zoom and viewbox dimensions
-    int win_w, win_h;
-    SDL_GetWindowSize(state->window, &win_w, &win_h);
-    // TODO calculate with respect to both w and h
-    // zoom_level = -(logN(0.5, box_h/img_h)/0.5)
-    state->zoom_level = -(log((float)win_h/state->img_h)/log(0.5)/0.5)-1;
-    state->scale = get_scale(state->zoom_level);
-    state->box_in_window_rect.w = state->img_w * state->scale;
-    state->box_in_window_rect.h = state->img_h * state->scale;
-    // calculate initial box position
-    state->box_in_window_rect.x = (win_w - state->box_in_window_rect.w) / 2;
-    state->box_in_window_rect.y = (win_h - state->box_in_window_rect.h) / 2;
+    // centered
+    state->view_rect.x = (state->win_w - state->view_rect.w) / 2;
+    state->view_rect.y = (state->win_h - state->view_rect.h) / 2;
     render_window(state);
 }
 
-void update_move_state(struct State *state, float cur_win_x, float cur_win_y) {
-    state->mv_initial_box_x = state->box_in_window_rect.x;
-    state->mv_initial_box_y = state->box_in_window_rect.y;
-    state->mv_initial_ptr_x = cur_win_x;
-    state->mv_initial_ptr_y = cur_win_y;
+// non-redrawing, non-view_rect-changing, only reset window and bg
+void set_fullscreen_off(struct State* state) {
+    state->win_fullscreen = false;
+    // TODO clear window?
+    SDL_SetWindowFullscreen(state->window, false);
+    SDL_SetRenderDrawColor(state->renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT);
 }
 
-void handle_move(struct State *state, float cur_win_x, float cur_win_y) {
+// before calling this, update win_cur_x, _y
+void save_pre_mv_coords(struct State *state) {
+    state->view_rect_pre_mv_x = state->view_rect.x;
+    state->view_rect_pre_mv_y = state->view_rect.y;
+    state->win_pre_mv_cur_x = state->win_cur_x;
+    state->win_pre_mv_cur_y = state->win_cur_y;
+}
+
+// zoom with preserving current image point under cursor
+void view_zoom_to_level(struct State* state, int view_zoom_level) {
+    if (state->win_fullscreen) {
+        set_fullscreen_off(state);
+    }
+    SDL_GetMouseState(&state->win_cur_x, &state->win_cur_y);
+    state->img_cur_x = (state->win_cur_x - state->view_rect.x) / state->view_zoom_scale;
+    state->img_cur_y = (state->win_cur_y - state->view_rect.y) / state->view_zoom_scale;
+    set_zoom_level(state, view_zoom_level);
+    state->view_rect.x = state->win_cur_x - state->img_cur_x * state->view_zoom_scale;
+    state->view_rect.y = state->win_cur_y - state->img_cur_y * state->view_zoom_scale;
+    // TODO cursor still loses current image point when zooming while dragging
+    save_pre_mv_coords(state);
+    render_window(state);
+}
+
+// move view_rect from pos corresponding to saved pre_mv cursor pos to current pos
+void view_move(struct State* state) {
+    // ignore new move events until current is processed
     SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION, false);
-    // update viewbox position relative to window
-    // we must have saved initial coords of move when mouse button was pressed
-    state->box_in_window_rect.x = state->mv_initial_box_x + (cur_win_x - state->mv_initial_ptr_x);
-    state->box_in_window_rect.y = state->mv_initial_box_y + (cur_win_y - state->mv_initial_ptr_y);
+    if (state->win_fullscreen) {
+        set_fullscreen_off(state);
+    }
+    state->view_rect.x = state->view_rect_pre_mv_x + (state->win_cur_x - state->win_pre_mv_cur_x);
+    state->view_rect.y = state->view_rect_pre_mv_y + (state->win_cur_y - state->win_pre_mv_cur_y);
     render_window(state);
     SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION, true);
 }
 
-void handle_scroll(struct State *state, float cur_win_x, float cur_win_y, char up) {
-    // calculate new viewbox size and position
-    float cur_img_x = (cur_win_x - state->box_in_window_rect.x) / state->scale;
-    float cur_img_y = (cur_win_y - state->box_in_window_rect.y) / state->scale;
-    up ? state->zoom_level++ : state->zoom_level--;
-    state->scale = get_scale(state->zoom_level);
-    state->box_in_window_rect.w = state->img_w * state->scale;
-    state->box_in_window_rect.h = state->img_h * state->scale;
-    state->box_in_window_rect.x = cur_win_x - cur_img_x * state->scale;
-    state->box_in_window_rect.y = cur_win_y - cur_img_y * state->scale;
-    update_move_state(state, cur_win_x, cur_win_y);
+// TODO ideas for consistent view state on subsequent switch to non-fullscreen:
+// a) (current impl) save copy of view_rect before changing and restore it after render_window() call; next time view_rect will be pre-fullscreen
+// b) change zoom_scale to match fullscreen view_rect, leave zoom_level unchanged, next time update view as in zoom_to_level(zoom_level) first; view_rect size will be pre-fullscreen, position will change so that image point under cursor will be one that will be in fullscreen view_rect then
+// c) save img_cur coords before changing view_rect, next time update view_rect like in zoom_to_level(zoom_level) first, but without updating img_cur coords; view_rect size will be pre-fullscreen, position will change so that image point under cursor will be one that is in pre-fullscreen view_rect (like hidden pre-fullscreen view_rect is dragged while in fullscreen)
+void view_set_fullscreen_on(struct State* state) {
+    state->win_fullscreen = true;
+    SDL_FRect view_rect_saved = state->view_rect;
+    // TODO clear window?
+    // TODO in Plasma Wayland, shell UI doesn't hide after this, instead hides upon next render_window() call after switching back to non-fullscreen
+    SDL_SetWindowFullscreen(state->window, true);
+    SDL_GetWindowSize(state->window, &state->win_w, &state->win_h);
+    state->view_rect.w = state->win_w;
+    state->view_rect.x = 0;
+    state->view_rect.h = state->img_h * state->win_w / state->img_w;
+    if (state->view_rect.h > state->win_h) {
+        state->view_rect.h = state->win_h;
+        state->view_rect.y = 0;
+        state->view_rect.w = state->img_w * state->win_h / state->img_h;
+        state->view_rect.x = (state->win_w - state->view_rect.w) / 2;
+        //state->view_zoom_scale = (float)state->win_h / state->img_h;
+    }
+    else {
+        state->view_rect.y = (state->win_h - state->view_rect.h) / 2;
+        //state->view_zoom_scale = (float)state->win_w / state->img_w;
+    }
+    SDL_SetRenderDrawColor(state->renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
+    render_window(state);
+    state->view_rect = view_rect_saved;
+}
+
+void view_set_fullscreen_off(struct State* state) {
+    set_fullscreen_off(state);
     render_window(state);
 }
 
+void toggle_fullscreen(struct State* state) {
+    if (!state->win_fullscreen) {
+        view_set_fullscreen_on(state);
+    } else {
+        view_set_fullscreen_off(state);
+    }
+}
+
 // TODO consider moving to SDL3 callbacks
-// TODO consider moving all state to state obj
 int main(int argc, char** argv)
 {
     if( argc < 2 ) {
@@ -128,30 +238,12 @@ int main(int argc, char** argv)
         exit(1);
     }
     struct State state;
-    // TODO current display in multi monitor setup?
-    // TODO SDL improvement: not require window size for SDL_WINDOW_MAXIMIZED
-    if (!SDL_Init(SDL_INIT_VIDEO)){
-        SDL_Log("SDL_Init failed: %s", SDL_GetError());
-        exit(1);
-    }
-    int display_count;
-    SDL_DisplayID *displays = SDL_GetDisplays(&display_count); // free:
-    if(!display_count) {
-        SDL_Log("SDL_GetDisplays failed: %s", SDL_GetError());
-        exit(1);
-    }
-    const SDL_DisplayMode* display_mode = SDL_GetDesktopDisplayMode(displays[0]); // free:
-    if (NULL==display_mode) {
-        SDL_Log("SDL_GetDesktopDisplayMode failed: %s", SDL_GetError());
-        exit(1);
-    }
-    if (!SDL_CreateWindowAndRenderer("Lightning Image Viewer", display_mode->w, display_mode->h, SDL_WINDOW_BORDERLESS|SDL_WINDOW_MAXIMIZED|SDL_WINDOW_TRANSPARENT, &state.window, &state.renderer)) {
-        SDL_Log("SDL_CreateWindowAndRenderer failed: %s", SDL_GetError());
-        exit(1);
-    }
+    init_state(&state);
     load_image(&state, argv[1]);
+    view_reset(&state);
     // event loop
     SDL_Event event;
+    // TODO consider moving all state to state obj
     char should_exit = false;
     char lmousebtn_pressed = false;
     char should_exit_on_lmousebtn_release;
@@ -160,43 +252,46 @@ int main(int argc, char** argv)
             switch (event.type) {
                 case SDL_EVENT_MOUSE_WHEEL:
                     if (event.wheel.y != 0) {
-                        float cur_win_x, cur_win_y;
-                        SDL_GetMouseState(&cur_win_x, &cur_win_y);
-                        handle_scroll(&state, cur_win_x, cur_win_y, event.wheel.y>0);
+                        view_zoom_to_level(&state, event.wheel.y>0 ? state.view_zoom_level+1 : state.view_zoom_level-1);
                         should_exit_on_lmousebtn_release = false;
                     }
                     break;
                 case SDL_EVENT_MOUSE_MOTION:
                     if (lmousebtn_pressed) {
-                        // coords relative to window
-                        handle_move(&state, event.motion.x, event.motion.y);
+                        state.win_cur_x = event.motion.x;
+                        state.win_cur_y = event.motion.y;
+                        view_move(&state);
                         should_exit_on_lmousebtn_release = false;
                     }
                     break;
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                    if (event.button.button == SDL_BUTTON_LEFT) {
-                        lmousebtn_pressed = true;
-                        float cur_win_x, cur_win_y;
-                        SDL_GetMouseState(&cur_win_x, &cur_win_y);
-                        update_move_state(&state, cur_win_x, cur_win_y);
-                        should_exit_on_lmousebtn_release = true;
+                    switch (event.button.button) {
+                        case SDL_BUTTON_LEFT:
+                            lmousebtn_pressed = true;
+                            SDL_GetMouseState(&state.win_cur_x, &state.win_cur_y);
+                            save_pre_mv_coords(&state);
+                            should_exit_on_lmousebtn_release = true;
+                            break;
                     }
                     break;
                 case SDL_EVENT_MOUSE_BUTTON_UP:
-                    if (event.button.button == SDL_BUTTON_LEFT) {
-                        float cur_win_x, cur_win_y;
-                        SDL_GetMouseState(&cur_win_x, &cur_win_y);
-                        lmousebtn_pressed = false;
-                        if (should_exit_on_lmousebtn_release) {
-                            should_exit = true;
-                        }
+                    switch (event.button.button) {
+                        case SDL_BUTTON_LEFT:
+                            if (should_exit_on_lmousebtn_release) {
+                                exit(0);
+                            }
+                            lmousebtn_pressed = false;
+                            break;
+                        case SDL_BUTTON_MIDDLE:
+                            toggle_fullscreen(&state);
+                            break;
                     }
                     break;
                 case SDL_EVENT_QUIT:
-                    should_exit = true;
-                    break;
+                    exit(0);
             }
         }
+        // TODO why? Doesn't it cause skipping other events when/immediately after mouse move?
         SDL_Delay(10);
     }
     return 0;
