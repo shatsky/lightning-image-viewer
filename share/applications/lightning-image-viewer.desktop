@@ -1,5 +1,6 @@
 [Desktop Entry]
 Name=Lightning Image Viewer
+Icon=lightning-image-viewer
 Exec=lightning-image-viewer %F
 Type=Application
 Terminal=false
