@@ -328,6 +328,16 @@ int main(int argc, char** argv)
                         break;
                 }
                 break;
+            case SDL_EVENT_KEY_DOWN:
+                switch(event.key.scancode) {
+                    case SDL_SCANCODE_Q:
+                        // quit
+                        exit(0);
+                    case SDL_SCANCODE_ESCAPE:
+                        // quit
+                        exit(0);
+                }
+                break;
             case SDL_EVENT_QUIT:
                 exit(0);
         }
