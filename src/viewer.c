@@ -287,55 +287,50 @@ int main(int argc, char** argv)
     // event loop
     SDL_Event event;
     // TODO consider moving all state to state obj
-    char should_exit = false;
     char lmousebtn_pressed = false;
     char should_exit_on_lmousebtn_release;
-    while(should_exit == false) {
-        while (SDL_PollEvent(&event)) {
-            switch (event.type) {
-                case SDL_EVENT_MOUSE_WHEEL:
-                    if (event.wheel.y != 0) {
-                        view_zoom_to_level(&state, event.wheel.y>0 ? state.view_zoom_level+1 : state.view_zoom_level-1);
-                        should_exit_on_lmousebtn_release = false;
-                    }
-                    break;
-                case SDL_EVENT_MOUSE_MOTION:
-                    if (lmousebtn_pressed) {
-                        state.win_cur_x = event.motion.x;
-                        state.win_cur_y = event.motion.y;
-                        view_move(&state);
-                        should_exit_on_lmousebtn_release = false;
-                    }
-                    break;
-                case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                    switch (event.button.button) {
-                        case SDL_BUTTON_LEFT:
-                            lmousebtn_pressed = true;
-                            SDL_GetMouseState(&state.win_cur_x, &state.win_cur_y);
-                            save_pre_mv_coords(&state);
-                            should_exit_on_lmousebtn_release = true;
-                            break;
-                    }
-                    break;
-                case SDL_EVENT_MOUSE_BUTTON_UP:
-                    switch (event.button.button) {
-                        case SDL_BUTTON_LEFT:
-                            if (should_exit_on_lmousebtn_release) {
-                                exit(0);
-                            }
-                            lmousebtn_pressed = false;
-                            break;
-                        case SDL_BUTTON_MIDDLE:
-                            toggle_fullscreen(&state);
-                            break;
-                    }
-                    break;
-                case SDL_EVENT_QUIT:
-                    exit(0);
-            }
+    while(SDL_WaitEvent(&event)) {
+        switch (event.type) {
+            case SDL_EVENT_MOUSE_WHEEL:
+                if (event.wheel.y != 0) {
+                    view_zoom_to_level(&state, event.wheel.y>0 ? state.view_zoom_level+1 : state.view_zoom_level-1);
+                    should_exit_on_lmousebtn_release = false;
+                }
+                break;
+            case SDL_EVENT_MOUSE_MOTION:
+                if (lmousebtn_pressed) {
+                    state.win_cur_x = event.motion.x;
+                    state.win_cur_y = event.motion.y;
+                    view_move(&state);
+                    should_exit_on_lmousebtn_release = false;
+                }
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                switch (event.button.button) {
+                    case SDL_BUTTON_LEFT:
+                        lmousebtn_pressed = true;
+                        SDL_GetMouseState(&state.win_cur_x, &state.win_cur_y);
+                        save_pre_mv_coords(&state);
+                        should_exit_on_lmousebtn_release = true;
+                        break;
+                }
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                switch (event.button.button) {
+                    case SDL_BUTTON_LEFT:
+                        if (should_exit_on_lmousebtn_release) {
+                            exit(0);
+                        }
+                        lmousebtn_pressed = false;
+                        break;
+                    case SDL_BUTTON_MIDDLE:
+                        toggle_fullscreen(&state);
+                        break;
+                }
+                break;
+            case SDL_EVENT_QUIT:
+                exit(0);
         }
-        // TODO why? Doesn't it cause skipping other events when/immediately after mouse move?
-        SDL_Delay(10);
     }
     return 0;
 }
