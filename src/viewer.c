@@ -20,6 +20,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_mutex.h>
 #include <SDL3_image/SDL_image.h>
 
 // design
@@ -40,6 +41,8 @@
 struct State {
     // cur x, y: coords of current point (under cursor)
     // pre mv: at start of move (drag) action
+    char* file_path;
+    SDL_Semaphore* file_dialog_semaphore;
     int display_count;
     SDL_DisplayID* displays;
     const SDL_DisplayMode* display_mode;
@@ -91,12 +94,29 @@ void init_state(struct State* state) {
     state->win_fullscreen = false;
 }
 
-void load_image(struct State *state, char *filepath) {
+static void SDLCALL file_dialog_callback(void* userdata, const char * const *filelist, int filter) {
+    struct State* state = (struct State*)userdata;
+    if (NULL == filelist) {
+        SDL_Log("SDL_ShowOpenFileDialog failed: %s", SDL_GetError());
+        exit(1);
+    } else {
+        for (int i=0; filelist[i]!=NULL; i++) {
+            // TODO free previous?
+            state->file_path = SDL_strdup(filelist[i]);
+            SDL_SignalSemaphore(state->file_dialog_semaphore);
+            return;
+        }
+        SDL_Log("SDL_ShowOpenFileDialog returned empty filelist");
+        exit(1);
+    }
+}
+
+void load_image(struct State *state) {
     // decode image into surface, get its dimensions and create texture from it
     // SDL surface is in RAM, texture is in VRAM (and uses less CPU for processing)
     // IMG_LoadTexture() creates tmp surface, too
-    //state->image_texture = IMG_LoadTexture(state->renderer, filepath);
-    state->image_surface = IMG_Load(filepath);
+    //state->image_texture = IMG_LoadTexture(state->renderer, state->file_path);
+    state->image_surface = IMG_Load(state->file_path);
     if (NULL == state->image_surface) {
         SDL_Log("IMG_Load failed");
         exit(1);
@@ -239,13 +259,30 @@ void toggle_fullscreen(struct State* state) {
 // TODO consider moving to SDL3 callbacks
 int main(int argc, char** argv)
 {
-    if( argc < 2 ) {
-        SDL_Log("Filepath argument missing");
-        exit(1);
-    }
     struct State state;
     init_state(&state);
-    load_image(&state, argv[1]);
+    if( argc < 2 ) {
+        state.file_dialog_semaphore = SDL_CreateSemaphore(0);
+        if (!state.file_dialog_semaphore) {
+            SDL_Log("SDL_CreateSemaphore failed: %s", SDL_GetError());
+            exit(1);
+        }
+        SDL_ShowOpenFileDialog(&file_dialog_callback, (void*)&state, state.window, NULL, 0, NULL, false);
+        //SDL_WaitSemaphore(state.file_dialog_semaphore);
+        // on some platforms incl. Linux with xdg-desktop-portal it requires event loop to call the callback
+        // SDL_WaitEvent(NULL) doesn't work here, it won't run loop body until there's actual SDL event
+        // TODO events while waiting for dialog? App exit?
+        while (true) {
+            SDL_Delay(10);
+            SDL_PumpEvents();
+            if (SDL_TryWaitSemaphore(state.file_dialog_semaphore)) {
+                break;
+            }
+        }
+    } else {
+        state.file_path = argv[1];
+    }
+    load_image(&state);
     view_reset(&state);
     // event loop
     SDL_Event event;
