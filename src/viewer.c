@@ -91,6 +91,7 @@ void init_state() {
         SDL_Log("SDL_CreateWindowAndRenderer failed: %s", SDL_GetError());
         exit(1);
     }
+    SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
     state.win_fullscreen = false;
 }
 
@@ -147,7 +148,28 @@ void render_window() {
     SDL_RenderClear(state.renderer);
     // copy image to presentation area in renderer backbuffer
     // TODO ensure that clipping is done correctly without overhead
-    SDL_RenderTexture(state.renderer, state.image_texture, NULL, &state.view_rect);
+    // for non-fullscreen simply render with state values, but for fullscreen
+    if (state.win_fullscreen) {
+        // use temporary local view_rect
+        SDL_FRect view_rect;
+        // assuming that fullscreen window can be bigger because of shell
+        // TODO use state.display_mode->w, state.display_mode->h ?
+        view_rect.w = state.win_w;
+        view_rect.x = 0;
+        view_rect.h = state.img_h * state.win_w / state.img_w;
+        if (view_rect.h > state.win_h) {
+            view_rect.h = state.win_h;
+            view_rect.y = 0;
+            view_rect.w = state.img_w * state.win_h / state.img_h;
+            view_rect.x = (state.win_w - view_rect.w) / 2;
+        }
+        else {
+            view_rect.y = (state.win_h - view_rect.h) / 2;
+        }
+        SDL_RenderTexture(state.renderer, state.image_texture, NULL, &view_rect);
+    } else {
+        SDL_RenderTexture(state.renderer, state.image_texture, NULL, &state.view_rect);
+    }
     // copy renderer backbuffer to frontbuffer
     SDL_RenderPresent(state.renderer);
 }
@@ -155,7 +177,6 @@ void render_window() {
 // reset view_rect to initial scale and position
 void view_reset() {
     // calculate max zoom level to fit whole image
-    SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
     // zoom_level = 2*log2(scale)
     set_zoom_level(floor(2 * log2((float)state.win_h / state.img_h)));
     if (state.img_w*state.view_zoom_scale > state.win_w) {
@@ -168,11 +189,19 @@ void view_reset() {
 }
 
 // non-redrawing, non-view_rect-changing, only reset window and bg
-void set_fullscreen_off() {
-    state.win_fullscreen = false;
+void set_win_fullscreen(bool win_fullscreen) {
+    state.win_fullscreen = win_fullscreen;
     // TODO clear window?
-    SDL_SetWindowFullscreen(state.window, false);
-    SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT);
+    // TODO in Plasma Wayland, shell UI doesn't hide/show after this, instead upon next render_window() call, but not if immediately
+    if (win_fullscreen) {
+        SDL_SetWindowFullscreen(state.window, true);
+        SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
+        SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
+    } else {
+        SDL_SetWindowFullscreen(state.window, false);
+        SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
+        SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT);
+    }
 }
 
 // before calling this, update win_cur_x, _y
@@ -186,7 +215,7 @@ void save_pre_mv_coords() {
 // zoom with preserving current image point under cursor
 void view_zoom_to_level(int view_zoom_level) {
     if (state.win_fullscreen) {
-        set_fullscreen_off();
+        set_win_fullscreen(false);
     }
     SDL_GetMouseState(&state.win_cur_x, &state.win_cur_y);
     state.img_cur_x = (state.win_cur_x - state.view_rect.x) / state.view_zoom_scale;
@@ -204,55 +233,12 @@ void view_move() {
     // ignore new move events until current is processed
     SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION, false);
     if (state.win_fullscreen) {
-        set_fullscreen_off();
+        set_win_fullscreen(false);
     }
     state.view_rect.x = state.view_rect_pre_mv_x + (state.win_cur_x - state.win_pre_mv_cur_x);
     state.view_rect.y = state.view_rect_pre_mv_y + (state.win_cur_y - state.win_pre_mv_cur_y);
     render_window();
     SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION, true);
-}
-
-// TODO ideas for consistent view state on subsequent switch to non-fullscreen:
-// a) (current impl) save copy of view_rect before changing and restore it after render_window() call; next time view_rect will be pre-fullscreen
-// b) change zoom_scale to match fullscreen view_rect, leave zoom_level unchanged, next time update view as in zoom_to_level(zoom_level) first; view_rect size will be pre-fullscreen, position will change so that image point under cursor will be one that will be in fullscreen view_rect then
-// c) save img_cur coords before changing view_rect, next time update view_rect like in zoom_to_level(zoom_level) first, but without updating img_cur coords; view_rect size will be pre-fullscreen, position will change so that image point under cursor will be one that is in pre-fullscreen view_rect (like hidden pre-fullscreen view_rect is dragged while in fullscreen)
-void view_set_fullscreen_on() {
-    state.win_fullscreen = true;
-    SDL_FRect view_rect_saved = state.view_rect;
-    // TODO clear window?
-    // TODO in Plasma Wayland, shell UI doesn't hide after this, instead hides upon next render_window() call after switching back to non-fullscreen
-    SDL_SetWindowFullscreen(state.window, true);
-    SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
-    state.view_rect.w = state.win_w;
-    state.view_rect.x = 0;
-    state.view_rect.h = state.img_h * state.win_w / state.img_w;
-    if (state.view_rect.h > state.win_h) {
-        state.view_rect.h = state.win_h;
-        state.view_rect.y = 0;
-        state.view_rect.w = state.img_w * state.win_h / state.img_h;
-        state.view_rect.x = (state.win_w - state.view_rect.w) / 2;
-        //state.view_zoom_scale = (float)state.win_h / state.img_h;
-    }
-    else {
-        state.view_rect.y = (state.win_h - state.view_rect.h) / 2;
-        //state.view_zoom_scale = (float)state.win_w / state.img_w;
-    }
-    SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
-    render_window();
-    state.view_rect = view_rect_saved;
-}
-
-void view_set_fullscreen_off() {
-    set_fullscreen_off();
-    render_window();
-}
-
-void toggle_fullscreen() {
-    if (!state.win_fullscreen) {
-        view_set_fullscreen_on();
-    } else {
-        view_set_fullscreen_off();
-    }
 }
 
 // TODO consider moving to SDL3 callbacks
@@ -322,12 +308,18 @@ int main(int argc, char** argv)
                         lmousebtn_pressed = false;
                         break;
                     case SDL_BUTTON_MIDDLE:
-                        toggle_fullscreen();
+                        set_win_fullscreen(!state.win_fullscreen);
+                        render_window();
                         break;
                 }
                 break;
             case SDL_EVENT_KEY_DOWN:
                 switch(event.key.scancode) {
+                    case SDL_SCANCODE_F:
+                        // toggle fullscreen
+                        set_win_fullscreen(!state.win_fullscreen);
+                        render_window();
+                        break;
                     case SDL_SCANCODE_Q:
                         // quit
                         exit(0);
