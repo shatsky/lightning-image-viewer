@@ -188,20 +188,19 @@ void view_reset() {
     render_window();
 }
 
-// non-redrawing, non-view_rect-changing, only reset window and bg
+// non-redrawing, non-view_rect-changing, only set window state and bg color for subsequent render_window() call
 void set_win_fullscreen(bool win_fullscreen) {
     state.win_fullscreen = win_fullscreen;
     // TODO clear window?
-    // TODO in Plasma Wayland, shell UI doesn't hide/show after this, instead upon next render_window() call, but not if immediately
+    // TODO on Plasma Wayland, shell UI isn't hidden/shown after this; happens upon render_window() call after another event
     if (win_fullscreen) {
         SDL_SetWindowFullscreen(state.window, true);
-        SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
         SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
     } else {
         SDL_SetWindowFullscreen(state.window, false);
-        SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
         SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT);
     }
+    SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
 }
 
 // before calling this, update win_cur_x, _y
