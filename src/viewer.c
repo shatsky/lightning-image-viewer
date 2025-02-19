@@ -67,6 +67,8 @@ struct State {
     float view_zoom_scale;
     float view_rect_pre_mv_x;
     float view_rect_pre_mv_y;
+    int view_rotation_angle_q; // 1/4-turns
+    SDL_FlipMode view_flip_mode;
 } state;
 
 // set default state values and get ready for loading image and calling view_* functions
@@ -148,27 +150,27 @@ void render_window() {
     SDL_RenderClear(state.renderer);
     // copy image to presentation area in renderer backbuffer
     // TODO ensure that clipping is done correctly without overhead
-    // for non-fullscreen simply render with state values, but for fullscreen
+    // for non-fullscreen simply render with state values, but for fullscreen set view_rect values to fit to screen
     if (state.win_fullscreen) {
-        // use temporary local view_rect
+        // using temporary local view_rect; because we want state.view_rect preserved for subsequent switch to non-fullscreen, and, with only transformations available in fullscreen being mirror and rotate, setting fullscreen view_rect values doesn't depend on previous fullscreen view_rect values
         SDL_FRect view_rect;
-        // assuming that fullscreen window can be bigger because of shell
         // TODO use state.display_mode->w, state.display_mode->h ?
-        view_rect.w = state.win_w;
-        view_rect.x = 0;
-        view_rect.h = state.img_h * state.win_w / state.img_w;
-        if (view_rect.h > state.win_h) {
-            view_rect.h = state.win_h;
-            view_rect.y = 0;
-            view_rect.w = state.img_w * state.win_h / state.img_h;
-            view_rect.x = (state.win_w - view_rect.w) / 2;
+        // SDL_RenderTextureRotated() draws as if view_rect itself is rotated around its center; in non-fullscreen it's what we want, but in fullscreen we want it to fit to screen, so we have to set such view_rect values that it fits the screen when rotated; using temporary local conditionally-swapped win_w and win_h for setting view_rect.w and view_rect.h
+        int win_w = state.view_rotation_angle_q%2 ? state.win_h : state.win_w;
+        int win_h = state.view_rotation_angle_q%2 ? state.win_w : state.win_h;
+        // start with assumption that image is stretched wider than window, view_rect.w = win_w
+        view_rect.h = state.img_h * win_w / state.img_w;
+        if (view_rect.h > win_h) {
+            view_rect.h = win_h;
+            view_rect.w = state.img_w * win_h / state.img_h;
+        } else {
+            view_rect.w = win_w;
         }
-        else {
-            view_rect.y = (state.win_h - view_rect.h) / 2;
-        }
-        SDL_RenderTexture(state.renderer, state.image_texture, NULL, &view_rect);
+        view_rect.x = (state.win_w - view_rect.w) / 2;
+        view_rect.y = (state.win_h - view_rect.h) / 2;
+        SDL_RenderTextureRotated(state.renderer, state.image_texture, NULL, &view_rect, state.view_rotation_angle_q*90, NULL, state.view_flip_mode);
     } else {
-        SDL_RenderTexture(state.renderer, state.image_texture, NULL, &state.view_rect);
+        SDL_RenderTextureRotated(state.renderer, state.image_texture, NULL, &state.view_rect, state.view_rotation_angle_q*90, NULL, state.view_flip_mode);
     }
     // copy renderer backbuffer to frontbuffer
     SDL_RenderPresent(state.renderer);
@@ -176,7 +178,9 @@ void render_window() {
 
 // reset view_rect to initial scale and position
 void view_reset() {
-    // calculate max zoom level to fit whole image
+    state.view_rotation_angle_q = 0;
+    state.view_flip_mode = SDL_FLIP_NONE;
+    // set max zoom level at which entire image fits in window
     // zoom_level = 2*log2(scale)
     set_zoom_level(floor(2 * log2((float)state.win_h / state.img_h)));
     if (state.img_w*state.view_zoom_scale > state.win_w) {
@@ -200,6 +204,7 @@ void set_win_fullscreen(bool win_fullscreen) {
         SDL_SetWindowFullscreen(state.window, false);
         SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT);
     }
+    // assuming that window size can change because of shell UI
     SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
 }
 
@@ -319,9 +324,33 @@ int main(int argc, char** argv)
                         set_win_fullscreen(!state.win_fullscreen);
                         render_window();
                         break;
+                    case SDL_SCANCODE_L:
+                        // rotate counter clockwise
+                        state.view_rotation_angle_q = (state.view_rotation_angle_q + 3) % 4;
+                        render_window();
+                        break;
+                    case SDL_SCANCODE_M:
+                        // mirror horizontally
+                        if (state.view_flip_mode == SDL_FLIP_NONE) {
+                            state.view_flip_mode = state.view_rotation_angle_q%2 ? SDL_FLIP_VERTICAL : SDL_FLIP_HORIZONTAL;
+                        } else {
+                            if ((state.view_flip_mode==SDL_FLIP_HORIZONTAL && state.view_rotation_angle_q%2) ||
+                                (state.view_flip_mode==SDL_FLIP_VERTICAL && !(state.view_rotation_angle_q%2))
+                            ) {
+                                state.view_rotation_angle_q = (state.view_rotation_angle_q + 2) % 4;
+                            }
+                            state.view_flip_mode = SDL_FLIP_NONE;
+                        }
+                        render_window();
+                        break;
                     case SDL_SCANCODE_Q:
                         // quit
                         exit(0);
+                    case SDL_SCANCODE_R:
+                        // rotate clockwise
+                        state.view_rotation_angle_q = (state.view_rotation_angle_q + 1) % 4;
+                        render_window();
+                        break;
                     case SDL_SCANCODE_ESCAPE:
                         // quit
                         exit(0);
