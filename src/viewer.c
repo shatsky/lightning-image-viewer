@@ -197,15 +197,10 @@ void set_win_fullscreen(bool win_fullscreen) {
     state.win_fullscreen = win_fullscreen;
     // TODO clear window?
     // TODO on Plasma Wayland, shell UI isn't hidden/shown after this; happens upon render_window() call after another event
-    if (win_fullscreen) {
-        SDL_SetWindowFullscreen(state.window, true);
-        SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
-    } else {
-        SDL_SetWindowFullscreen(state.window, false);
-        SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT);
-    }
+    SDL_SetWindowFullscreen(state.window, win_fullscreen);
     // assuming that window size can change because of shell UI
     SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
+    SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, win_fullscreen ? SDL_ALPHA_OPAQUE : SDL_ALPHA_TRANSPARENT);
 }
 
 // before calling this, update win_cur_x, _y
