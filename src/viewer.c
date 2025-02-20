@@ -67,8 +67,8 @@ struct State {
     float view_zoom_scale;
     float view_rect_pre_mv_x;
     float view_rect_pre_mv_y;
-    int view_rotation_angle_q; // 1/4-turns
-    SDL_FlipMode view_flip_mode;
+    int view_rotate_angle_q; // 1/4-turns
+    bool view_mirror;
 } state;
 
 // set default state values and get ready for loading image and calling view_* functions
@@ -148,42 +148,42 @@ void set_zoom_level(int view_zoom_level) {
 // redraw window contents with current state
 void render_window() {
     SDL_RenderClear(state.renderer);
-    // copy image to presentation area in renderer backbuffer
-    // TODO ensure that clipping is done correctly without overhead
-    // for non-fullscreen simply render with state values, but for fullscreen set view_rect values to fit to screen
+    // for non-fullscreen simply render with state values, but for fullscreen set view_rect values to fit to screen; using temporary local view_rect because we want state.view_rect values preserved for subsequent switch to non-fullscreen, and, with only transformations available in fullscreen being mirror and rotate, setting fullscreen view_rect values doesn't depend on previous fullscreen view_rect values
+    SDL_FRect view_rect;
     if (state.win_fullscreen) {
-        // using temporary local view_rect; because we want state.view_rect preserved for subsequent switch to non-fullscreen, and, with only transformations available in fullscreen being mirror and rotate, setting fullscreen view_rect values doesn't depend on previous fullscreen view_rect values
-        SDL_FRect view_rect;
         // TODO use state.display_mode->w, state.display_mode->h ?
-        // SDL_RenderTextureRotated() draws as if view_rect itself is rotated around its center; in non-fullscreen it's what we want, but in fullscreen we want it to fit to screen, so we have to set such view_rect values that it fits the screen when rotated; using temporary local conditionally-swapped win_w and win_h for setting view_rect.w and view_rect.h
-        int win_w = state.view_rotation_angle_q%2 ? state.win_h : state.win_w;
-        int win_h = state.view_rotation_angle_q%2 ? state.win_w : state.win_h;
-        // start with assumption that image is stretched wider than window, view_rect.w = win_w
-        view_rect.h = state.img_h * win_w / state.img_w;
-        if (view_rect.h > win_h) {
-            view_rect.h = win_h;
-            view_rect.w = state.img_w * win_h / state.img_h;
-        } else {
+        // SDL_RenderTextureRotated() draws as if view_rect itself is rotated around its center; in non-fullscreen this is what we want, but in fullscreen we want it to fit to screen, so we have to set such view_rect values that it fits to screen when rotated; using temporary local conditionally-swapped win_w and win_h for setting view_rect.w and view_rect.h
+        int win_w = state.view_rotate_angle_q%2 ? state.win_h : state.win_w;
+        int win_h = state.view_rotate_angle_q%2 ? state.win_w : state.win_h;
+        // start with assumption that image is more stretched vertically than window, view_rect.h = win_h
+        view_rect.w = state.img_w * win_h / state.img_h;
+        if (view_rect.w > win_w) {
             view_rect.w = win_w;
+            view_rect.h = state.img_h * win_w / state.img_w;
+        } else {
+            view_rect.h = win_h;
         }
+        // centered
         view_rect.x = (state.win_w - view_rect.w) / 2;
         view_rect.y = (state.win_h - view_rect.h) / 2;
-        SDL_RenderTextureRotated(state.renderer, state.image_texture, NULL, &view_rect, state.view_rotation_angle_q*90, NULL, state.view_flip_mode);
     } else {
-        SDL_RenderTextureRotated(state.renderer, state.image_texture, NULL, &state.view_rect, state.view_rotation_angle_q*90, NULL, state.view_flip_mode);
+        view_rect = state.view_rect;
     }
+    // copy image to presentation area in renderer backbuffer
+    // TODO ensure that clipping is done correctly without overhead
+    SDL_RenderTextureRotated(state.renderer, state.image_texture, NULL, &view_rect, state.view_rotate_angle_q*90, NULL, state.view_mirror ? (state.view_rotate_angle_q%2 ? SDL_FLIP_VERTICAL : SDL_FLIP_HORIZONTAL) : SDL_FLIP_NONE);
     // copy renderer backbuffer to frontbuffer
     SDL_RenderPresent(state.renderer);
 }
 
 // reset view_rect to initial scale and position
 void view_reset() {
-    state.view_rotation_angle_q = 0;
-    state.view_flip_mode = SDL_FLIP_NONE;
+    state.view_rotate_angle_q = 0;
+    state.view_mirror = false;
     // set max zoom level at which entire image fits in window
     // zoom_level = 2*log2(scale)
     set_zoom_level(floor(2 * log2((float)state.win_h / state.img_h)));
-    if (state.img_w*state.view_zoom_scale > state.win_w) {
+    if (state.view_rect.w > state.win_w) {
         set_zoom_level(floor(2 * log2((float)state.win_w / state.img_w)));
     }
     // centered
@@ -276,7 +276,7 @@ int main(int argc, char** argv)
     SDL_Event event;
     // TODO consider moving all state to state obj
     char lmousebtn_pressed = false;
-    char should_exit_on_lmousebtn_release;
+    char should_exit_on_lmousebtn_release = false;
     while(SDL_WaitEvent(&event)) {
         switch (event.type) {
             case SDL_EVENT_MOUSE_WHEEL:
@@ -326,21 +326,12 @@ int main(int argc, char** argv)
                         break;
                     case SDL_SCANCODE_L:
                         // rotate counter clockwise
-                        state.view_rotation_angle_q = (state.view_rotation_angle_q + 3) % 4;
+                        state.view_rotate_angle_q = (state.view_rotate_angle_q + (state.view_mirror ? 1 : 3)) % 4;
                         render_window();
                         break;
                     case SDL_SCANCODE_M:
                         // mirror horizontally
-                        if (state.view_flip_mode == SDL_FLIP_NONE) {
-                            state.view_flip_mode = state.view_rotation_angle_q%2 ? SDL_FLIP_VERTICAL : SDL_FLIP_HORIZONTAL;
-                        } else {
-                            if ((state.view_flip_mode==SDL_FLIP_HORIZONTAL && state.view_rotation_angle_q%2) ||
-                                (state.view_flip_mode==SDL_FLIP_VERTICAL && !(state.view_rotation_angle_q%2))
-                            ) {
-                                state.view_rotation_angle_q = (state.view_rotation_angle_q + 2) % 4;
-                            }
-                            state.view_flip_mode = SDL_FLIP_NONE;
-                        }
+                        state.view_mirror = !state.view_mirror;
                         render_window();
                         break;
                     case SDL_SCANCODE_Q:
@@ -348,7 +339,7 @@ int main(int argc, char** argv)
                         exit(0);
                     case SDL_SCANCODE_R:
                         // rotate clockwise
-                        state.view_rotation_angle_q = (state.view_rotation_angle_q + 1) % 4;
+                        state.view_rotate_angle_q = (state.view_rotate_angle_q + (state.view_mirror ? 3 : 1)) % 4;
                         render_window();
                         break;
                     case SDL_SCANCODE_ESCAPE:
