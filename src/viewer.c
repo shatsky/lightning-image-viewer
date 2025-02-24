@@ -80,8 +80,9 @@ struct State {
     float view_rect_pre_mv_y;
     int view_rotate_angle_q; // 1/4-turns
     bool view_mirror;
-    char* filelist; // ring buffer of strings (C/'\0'-terminated/separated) of image file paths (which can be switched between, next/prev)
-    size_t filelist_len; // length of filelist (in chars/bytes, not in filepath strings)
+    struct dirent** filelist;
+    int filelist_len;
+    int filelist_load_i; // index of filelist item name of which is currently pointed by state.file_load_path
 } state;
 
 // set default state values and get ready for loading image and calling view_* functions
@@ -325,46 +326,29 @@ void fill_filelist() {
         filename = state.file_load_path;
     }
 
-    struct dirent **dir_entry_list;
-    int dir_entry_list_len = scandir(".", &dir_entry_list, scandir_filter_image_files, scandir_compar_mtime); // free
-    if (dir_entry_list_len == -1) {
+    state.filelist_len = scandir(".", &state.filelist, scandir_filter_image_files, scandir_compar_mtime); // free
+    if (state.filelist_len == -1) {
         SDL_Log("scandir failed: %s", strerror(errno));
     } else {
-        if (dir_entry_list_len > 0) {
 
-            // calculate size for filelist and verify that file exists in dir
-            state.filelist_len = 0;
-            size_t filelist_load_offset = 0; // offset to initial state.file_load_path in filelist (if file is found in dir)
-            for (int i=0; i<dir_entry_list_len; i++) {
-                if (strcmp(filename, dir_entry_list[i]->d_name)==0) {
-                    filelist_load_offset = state.filelist_len;
-                }
-                state.filelist_len += strlen(dir_entry_list[i]->d_name) + 1;
-            }
-            if (filelist_load_offset==0 && strcmp(filename, dir_entry_list[0]->d_name)!=0) {
-                SDL_Log("file not found in directory");
-            } else {
-                // TODO free previous?
-                state.filelist = malloc(state.filelist_len);
-                if (state.filelist == NULL) {
-                    SDL_Log("malloc failed");
-                } else {
-                    // write filepaths to filelist
-                    char* filelist_cur = state.filelist;
-                    for (int i=0; i<dir_entry_list_len; i++) {
-                        strcpy(filelist_cur, dir_entry_list[i]->d_name);
-                        filelist_cur += strlen(dir_entry_list[i]->d_name) + 1;
-                    }
-                    free(state.file_load_path);
-                    state.file_load_path = state.filelist + filelist_load_offset;
-                }
-            }
-
-            while (dir_entry_list_len--) {
-                free(dir_entry_list[dir_entry_list_len]);
+        // verify that file exists in dir and change state.file_load_path to point to its name in filelist
+        state.filelist_load_i = 0;
+        for (int i=0; i<state.filelist_len; i++) {
+            if (strcmp(filename, state.filelist[i]->d_name)==0) {
+                state.filelist_load_i = i;
+                free(state.file_load_path);
+                state.file_load_path = state.filelist[state.filelist_load_i]->d_name;
+                break;
             }
         }
-        free(dir_entry_list);
+        if (state.filelist_len==0 || (state.filelist_load_i==0 && state.file_load_path!=state.filelist[0]->d_name)) {
+            SDL_Log("file not found in directory");
+            while (state.filelist_len--) {
+                free(state.filelist[state.filelist_len]);
+            }
+            free(state.filelist);
+            state.filelist = NULL;
+        }
     }
 }
 
@@ -383,21 +367,16 @@ void load_next_image(bool reverse) {
         }
     }
 
-    size_t filelist_load_offset = state.file_load_path - state.filelist;
-    size_t filelist_load_offset_saved = filelist_load_offset;
+    int filelist_load_i_saved = state.filelist_load_i;
     do {
-        // TODO no impl in std lib for handling circular buf of \0-terminated strings like this?
-        do {
-            filelist_load_offset = (filelist_load_offset + (reverse ? state.filelist_len - 1 : 1)) % state.filelist_len;
-        } while (*(state.filelist+((filelist_load_offset+state.filelist_len-1)%state.filelist_len)) != '\0');
-        state.file_load_path = state.filelist + filelist_load_offset;
+        state.filelist_load_i = (state.filelist_load_i + (reverse ? state.filelist_len - 1 : 1)) % state.filelist_len;
+        state.file_load_path = state.filelist[state.filelist_load_i]->d_name;
         load_image();
-        if (!state.file_load_success && filelist_load_offset == filelist_load_offset_saved) {
-            SDL_Log("IMG_Load failed; wrapped around filelist and failed to load any file");
-            view_reset();
-            return;
-        }
-    } while (!state.file_load_success);
+    } while (!state.file_load_success && state.filelist_load_i!=filelist_load_i_saved);
+    if (!state.file_load_success) {
+        SDL_Log("IMG_Load failed; wrapped around filelist and failed to load any file");
+        view_reset();
+    }
 }
 
 // TODO consider moving to SDL3 callbacks
