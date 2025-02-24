@@ -19,9 +19,19 @@
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <unistd.h> // chdir
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_mutex.h>
 #include <SDL3_image/SDL_image.h>
+
+#ifndef _WIN32
+    #define PATH_SEP '/'
+#else
+    #define PATH_SEP '\\'
+#endif
 
 // design
 // - state obj holds most of global state incl. view_rect
@@ -41,7 +51,8 @@
 struct State {
     // cur x, y: coords of current point (under cursor)
     // pre mv: at start of move (drag) action
-    char* file_path;
+    char* file_load_path;
+    bool file_load_success;
     SDL_Semaphore* file_dialog_semaphore;
     int display_count;
     SDL_DisplayID* displays;
@@ -69,6 +80,8 @@ struct State {
     float view_rect_pre_mv_y;
     int view_rotate_angle_q; // 1/4-turns
     bool view_mirror;
+    char* filelist; // ring buffer of strings (C/'\0'-terminated/separated) of image file paths (which can be switched between, next/prev)
+    size_t filelist_len; // length of filelist (in chars/bytes, not in filepath strings)
 } state;
 
 // set default state values and get ready for loading image and calling view_* functions
@@ -95,6 +108,8 @@ void init_state() {
     }
     SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
     state.win_fullscreen = false;
+    state.image_texture = NULL;
+    state.filelist = NULL;
 }
 
 static void SDLCALL file_dialog_callback(void* userdata, const char * const *filelist, int filter) {
@@ -104,32 +119,14 @@ static void SDLCALL file_dialog_callback(void* userdata, const char * const *fil
     } else {
         for (int i=0; filelist[i]!=NULL; i++) {
             // TODO free previous?
-            state.file_path = SDL_strdup(filelist[i]);
+            // SDL filelist is automatically freed upon callback return
+            state.file_load_path = SDL_strdup(filelist[i]);
             SDL_SignalSemaphore(state.file_dialog_semaphore);
             return;
         }
         SDL_Log("SDL_ShowOpenFileDialog returned empty filelist");
         exit(1);
     }
-}
-
-void load_image() {
-    // decode image into surface, get its dimensions and create texture from it
-    // SDL surface is in RAM, texture is in VRAM (and uses less CPU for processing)
-    // IMG_LoadTexture() creates tmp surface, too
-    //state.image_texture = IMG_LoadTexture(state.renderer, state.file_path);
-    state.image_surface = IMG_Load(state.file_path);
-    if (NULL == state.image_surface) {
-        SDL_Log("IMG_Load failed");
-        exit(1);
-    }
-    state.img_w = state.image_surface->w;
-    state.img_h = state.image_surface->h;
-    // TODO free previous texture?
-    state.image_texture = SDL_CreateTextureFromSurface(state.renderer, state.image_surface);
-    SDL_DestroySurface(state.image_surface);
-    // TODO default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect rendering at zoom level 0 (1:1 scale)
-    SDL_SetTextureScaleMode(state.image_texture, SDL_SCALEMODE_NEAREST);
 }
 
 // non-redrawing, only update scale and view_rect size
@@ -192,6 +189,30 @@ void view_reset() {
     render_window();
 }
 
+void load_image() {
+    // decode image into surface, get its dimensions and create texture from it
+    // SDL surface is in RAM, texture is in VRAM (and uses less CPU for processing)
+    // IMG_LoadTexture() creates tmp surface, too
+    //state.image_texture = IMG_LoadTexture(state.renderer, state.file_load_path);
+    state.image_surface = IMG_Load(state.file_load_path);
+    if (NULL == state.image_surface) {
+        // do not pollute logs; currently load_image can be called unsuccessfully for many irrelevant files when handling prev/next
+        //SDL_Log("IMG_Load failed");
+        state.file_load_success = false;
+        return;
+    }
+    state.file_load_success = true;
+    state.img_w = state.image_surface->w;
+    state.img_h = state.image_surface->h;
+    SDL_DestroyTexture(state.image_texture);
+    state.image_texture = SDL_CreateTextureFromSurface(state.renderer, state.image_surface);
+    SDL_DestroySurface(state.image_surface);
+    // TODO default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect rendering at zoom level 0 (1:1 scale)
+    SDL_SetTextureScaleMode(state.image_texture, SDL_SCALEMODE_NEAREST);
+    // TODO SDL_SetWindowTitle
+    view_reset();
+}
+
 // non-redrawing, non-view_rect-changing, only set window state and bg color for subsequent render_window() call
 void set_win_fullscreen(bool win_fullscreen) {
     state.win_fullscreen = win_fullscreen;
@@ -240,6 +261,145 @@ void view_move() {
     SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION, true);
 }
 
+// helper functions for scandir() which is called in fill_filelist() to get list of image files sorted by mtime
+// TODO get rid of duplicate stat() calls?
+
+int scandir_filter_image_files(const struct dirent* dir_entry) {
+    // TODO filter images by filename ext?
+    struct stat dir_entry_stat_buf;
+    if (stat(dir_entry->d_name, &dir_entry_stat_buf) == -1) {
+        // can fail for broken links?
+        SDL_Log("stat failed: %s", strerror(errno));
+        return 0;
+    }
+    return (dir_entry_stat_buf.st_mode & S_IFMT) == S_IFREG;
+}
+
+int scandir_compar_mtime(const struct dirent** dir_entry1, const struct dirent** dir_entry2) {
+    // TODO make scandir fail instead of terminating program?
+    struct stat dir_entry1_stat_buf, dir_entry2_stat_buf;
+    if (stat((*dir_entry1)->d_name, &dir_entry1_stat_buf) == -1 ||
+        stat((*dir_entry2)->d_name, &dir_entry2_stat_buf) == -1
+    ) {
+        // shouldn't fail because only called for entries for which has been already successfully called in scandir_filter_image_files()
+        SDL_Log("stat failed: %s", strerror(errno));
+        exit(1);
+    }
+    return dir_entry2_stat_buf.st_mtime - dir_entry1_stat_buf.st_mtime;
+}
+
+// fills filelist with filepaths of image files in parent dir of file state.file_load_path, enabling prev/next switch logic
+// before calling this, state.filelist must be NULL and state.file_load_path must point to allocated mem which can be freed via it
+// in case of success, mem pointed by state.file_load_path is freed and it's overwritten with address of same file path within state.filelist
+// in case of failure, state.file_load_path is preserved and state.filelist remains NULL
+// TODO what if state.file_load_path or filename is empty? For now it shouldn't be problem because program will be terminated earlier
+void fill_filelist() {
+    char* filename;
+    char* last_slash_ptr = strrchr(state.file_load_path, PATH_SEP);
+    // TODO also skip if state.file_load_path dir is current workdir
+    if (last_slash_ptr != NULL) {
+        *last_slash_ptr = '\0'; // undo after chdir
+        if (chdir(state.file_load_path) == -1) {
+            SDL_Log("chdir failed: %s", strerror(errno));
+            *last_slash_ptr = PATH_SEP;
+            return;
+        }
+        *last_slash_ptr = PATH_SEP;
+        filename = last_slash_ptr + 1;
+        if (*state.file_load_path!=PATH_SEP) {
+            // state.file_load_path is not absolute and is invalid after chdir
+            // TODO handle this better?
+            filename = strdup(filename);
+            if (filename == NULL) {
+                SDL_Log("strdup failed");
+                // make state.file_load_path empty str, should make it unloadable to avoid undefined behaviour
+                *state.file_load_path = '\0';
+                // should not hurt attempt to fill filelist
+                filename = last_slash_ptr + 1;
+            } else {
+                free(state.file_load_path);
+                state.file_load_path = filename;
+            }
+        }
+    } else {
+        filename = state.file_load_path;
+    }
+
+    struct dirent **dir_entry_list;
+    int dir_entry_list_len = scandir(".", &dir_entry_list, scandir_filter_image_files, scandir_compar_mtime); // free
+    if (dir_entry_list_len == -1) {
+        SDL_Log("scandir failed: %s", strerror(errno));
+    } else {
+        if (dir_entry_list_len > 0) {
+
+            // calculate size for filelist and verify that file exists in dir
+            state.filelist_len = 0;
+            size_t filelist_load_offset = 0; // offset to initial state.file_load_path in filelist (if file is found in dir)
+            for (int i=0; i<dir_entry_list_len; i++) {
+                if (strcmp(filename, dir_entry_list[i]->d_name)==0) {
+                    filelist_load_offset = state.filelist_len;
+                }
+                state.filelist_len += strlen(dir_entry_list[i]->d_name) + 1;
+            }
+            if (filelist_load_offset==0 && strcmp(filename, dir_entry_list[0]->d_name)!=0) {
+                SDL_Log("file not found in directory");
+            } else {
+                // TODO free previous?
+                state.filelist = malloc(state.filelist_len);
+                if (state.filelist == NULL) {
+                    SDL_Log("malloc failed");
+                } else {
+                    // write filepaths to filelist
+                    char* filelist_cur = state.filelist;
+                    for (int i=0; i<dir_entry_list_len; i++) {
+                        strcpy(filelist_cur, dir_entry_list[i]->d_name);
+                        filelist_cur += strlen(dir_entry_list[i]->d_name) + 1;
+                    }
+                    free(state.file_load_path);
+                    state.file_load_path = state.filelist + filelist_load_offset;
+                }
+            }
+
+            while (dir_entry_list_len--) {
+                free(dir_entry_list[dir_entry_list_len]);
+            }
+        }
+        free(dir_entry_list);
+    }
+}
+
+void load_next_image(bool reverse) {
+    // filelist is not filled until load_next_image() is called 1st time, to display initial image quicker
+    if (state.filelist == NULL) {
+        fill_filelist();
+        if (state.filelist == NULL) {
+            SDL_Log("failed to fill filelist");
+            load_image();
+            if (!state.file_load_success) {
+                SDL_Log("IMG_Load failed; failed to reload file");
+                view_reset();
+            }
+            return;
+        }
+    }
+
+    size_t filelist_load_offset = state.file_load_path - state.filelist;
+    size_t filelist_load_offset_saved = filelist_load_offset;
+    do {
+        // TODO no impl in std lib for handling circular buf of \0-terminated strings like this?
+        do {
+            filelist_load_offset = (filelist_load_offset + (reverse ? state.filelist_len - 1 : 1)) % state.filelist_len;
+        } while (*(state.filelist+((filelist_load_offset+state.filelist_len-1)%state.filelist_len)) != '\0');
+        state.file_load_path = state.filelist + filelist_load_offset;
+        load_image();
+        if (!state.file_load_success && filelist_load_offset == filelist_load_offset_saved) {
+            SDL_Log("IMG_Load failed; wrapped around filelist and failed to load any file");
+            view_reset();
+            return;
+        }
+    } while (!state.file_load_success);
+}
+
 // TODO consider moving to SDL3 callbacks
 int main(int argc, char** argv)
 {
@@ -263,10 +423,17 @@ int main(int argc, char** argv)
             }
         }
     } else {
-        state.file_path = argv[1];
+        state.file_load_path = strdup(argv[1]);
+        if (state.file_load_path == NULL) {
+            SDL_Log("strdup failed");
+            exit(1);
+        }
     }
     load_image();
-    view_reset();
+    if (!state.file_load_success) {
+        SDL_Log("IMG_Load failed; failed to load initial file");
+        exit(1);
+    }
     // event loop
     SDL_Event event;
     // TODO consider moving all state to state obj
@@ -340,6 +507,14 @@ int main(int argc, char** argv)
                     case SDL_SCANCODE_ESCAPE:
                         // quit
                         exit(0);
+                    case SDL_SCANCODE_PAGEUP:
+                        // prev
+                        load_next_image(true);
+                        break;
+                    case SDL_SCANCODE_PAGEDOWN:
+                        // next
+                        load_next_image(false);
+                        break;
                 }
                 break;
             case SDL_EVENT_QUIT:
