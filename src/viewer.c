@@ -327,7 +327,7 @@ void fill_filelist() {
                 break;
             }
         }
-        if (state.filelist_len==0 || (state.filelist_load_i==0 && state.file_load_path!=state.filelist[0]->d_name)) {
+        if (state.filelist_len==0 || state.file_load_path!=state.filelist[state.filelist_load_i]->d_name) {
             SDL_Log("file not found in directory");
             while (state.filelist_len--) {
                 free(state.filelist[state.filelist_len]);
