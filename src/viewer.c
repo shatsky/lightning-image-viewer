@@ -295,32 +295,22 @@ int scandir_compar_mtime(const struct dirent** dir_entry1, const struct dirent**
 // in case of failure, state.file_load_path is preserved and state.filelist remains NULL
 // TODO what if state.file_load_path or filename is empty? For now it shouldn't be problem because program will be terminated earlier
 void fill_filelist() {
-    char* filename;
-    char* last_slash_ptr = strrchr(state.file_load_path, PATH_SEP);
+    char* filename = strrchr(state.file_load_path, PATH_SEP); // used a bit hacky
     // TODO also skip if state.file_load_path dir is current workdir
-    if (last_slash_ptr != NULL) {
-        *last_slash_ptr = '\0'; // undo after chdir
+    if (filename != NULL) {
+        *filename = '\0'; // undo after chdir
         if (chdir(state.file_load_path) == -1) {
             SDL_Log("chdir failed: %s", strerror(errno));
-            *last_slash_ptr = PATH_SEP;
+            *filename = PATH_SEP;
             return;
         }
-        *last_slash_ptr = PATH_SEP;
-        filename = last_slash_ptr + 1;
+        *filename = PATH_SEP;
+        filename++;
         if (*state.file_load_path!=PATH_SEP) {
             // state.file_load_path is not absolute and is invalid after chdir
-            // TODO handle this better?
-            filename = strdup(filename);
-            if (filename == NULL) {
-                SDL_Log("strdup failed");
-                // make state.file_load_path empty str, should make it unloadable to avoid undefined behaviour
-                *state.file_load_path = '\0';
-                // should not hurt attempt to fill filelist
-                filename = last_slash_ptr + 1;
-            } else {
-                free(state.file_load_path);
-                state.file_load_path = filename;
-            }
+            // TODO strcpy not safe with possible overlap?
+            memmove(state.file_load_path, filename, strlen(filename)+1);
+            filename = state.file_load_path;
         }
     } else {
         filename = state.file_load_path;
