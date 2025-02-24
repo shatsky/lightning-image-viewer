@@ -306,15 +306,11 @@ void fill_filelist() {
         }
         *filename = PATH_SEP;
         filename++;
-        if (*state.file_load_path!=PATH_SEP) {
-            // state.file_load_path is not absolute and is invalid after chdir
-            // TODO strcpy not safe with possible overlap?
-            memmove(state.file_load_path, filename, strlen(filename)+1);
-            filename = state.file_load_path;
-        }
-    } else {
-        filename = state.file_load_path;
+        // strip state.file_load_path to filename to keep it valid after chdir
+        // TODO strcpy not safe with possible overlap?
+        memmove(state.file_load_path, filename, strlen(filename)+1);
     }
+    filename = state.file_load_path;
 
     state.filelist_len = scandir(".", &state.filelist, scandir_filter_image_files, scandir_compar_mtime); // free
     if (state.filelist_len == -1) {
