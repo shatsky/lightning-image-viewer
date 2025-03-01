@@ -27,6 +27,9 @@
 #include <SDL3/SDL_mutex.h>
 #include <SDL3_image/SDL_image.h>
 
+#define APP_NAME "Lightning Image Viewer"
+#define WIN_TITLE_TAIL " - " APP_NAME
+
 #ifndef _WIN32
     #define PATH_SEP '/'
 #else
@@ -103,7 +106,7 @@ void init_state() {
         SDL_Log("SDL_GetDesktopDisplayMode failed: %s", SDL_GetError());
         exit(1);
     }
-    if (!SDL_CreateWindowAndRenderer("Lightning Image Viewer", state.display_mode->w, state.display_mode->h, SDL_WINDOW_BORDERLESS|SDL_WINDOW_MAXIMIZED|SDL_WINDOW_TRANSPARENT, &state.window, &state.renderer)) {
+    if (!SDL_CreateWindowAndRenderer(APP_NAME, state.display_mode->w, state.display_mode->h, SDL_WINDOW_BORDERLESS|SDL_WINDOW_MAXIMIZED|SDL_WINDOW_TRANSPARENT, &state.window, &state.renderer)) {
         SDL_Log("SDL_CreateWindowAndRenderer failed: %s", SDL_GetError());
         exit(1);
     }
@@ -210,7 +213,28 @@ void load_image() {
     SDL_DestroySurface(state.image_surface);
     // TODO default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect rendering at zoom level 0 (1:1 scale)
     SDL_SetTextureScaleMode(state.image_texture, SDL_SCALEMODE_NEAREST);
-    // TODO SDL_SetWindowTitle
+    // update window title
+    // TODO chdir early and always have bare filename in state.file_load_path?
+    // TODO on Plasma Wayland window title is split by dash separator and 1st part is displayed in taskbar as filename; appname displayed in taskbar is taken from elsewhere, if app is launched via .desktop file it's Name, if app binary is launched directly it is Name from .desktop file with same binary or icon filename, if no such .desktop file found it is binary filename, if path to binary starts with '.' appname is not displayed at all
+    // TODO if X11 SDL video driver is used and em dash is used as separator (stored as its UTF8 repr in source) title is not updated at all, XWayland bug?
+    char* filename = strrchr(state.file_load_path, PATH_SEP);
+    if (filename == NULL) {
+        filename = state.file_load_path;
+    } else {
+        filename++;
+    }
+    char* win_title = malloc(strlen(filename)+strlen(WIN_TITLE_TAIL)+1);
+    if (win_title == NULL) {
+        SDL_Log("malloc failed");
+        exit(1);
+    }
+    strcpy(win_title, filename);
+    strcat(win_title, WIN_TITLE_TAIL);
+    if (!SDL_SetWindowTitle(state.window, win_title)) {
+        SDL_Log("SDL_SetWindowTitle failed: %s", SDL_GetError());
+        exit(1);
+    }
+    free(win_title);
     view_reset();
 }
 
