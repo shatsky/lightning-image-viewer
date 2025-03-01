@@ -1,12 +1,11 @@
-{ stdenv, SDL3, SDL3_image }:
+{ stdenv, sdl3, sdl3_image }:
 
 stdenv.mkDerivation {
   name = "lightning-image-viewer";
   src = builtins.fetchGit {
     url = ./.;
   };
-  nativeBuildInputs = [ ];
-  buildInputs = [ SDL3 SDL3_image ];
+  buildInputs = [ sdl3 sdl3_image ];
   buildPhase = ''
 
 mkdir -p $out/bin
