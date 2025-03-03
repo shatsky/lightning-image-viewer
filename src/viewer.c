@@ -392,6 +392,7 @@ void load_next_image(bool reverse) {
 // TODO consider moving to SDL3 callbacks
 int main(int argc, char** argv)
 {
+    SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_SCALE_TO_DISPLAY, "1");
     init_state();
     if( argc < 2 ) {
         state.file_dialog_semaphore = SDL_CreateSemaphore(0);
