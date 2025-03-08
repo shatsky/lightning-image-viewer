@@ -494,9 +494,17 @@ int main(int argc, char** argv)
                         state.view_rotate_angle_q = (state.view_rotate_angle_q + (state.view_mirror ? 3 : 1)) % 4;
                         render_window();
                         break;
+                    case SDL_SCANCODE_RETURN:
+                        // quit
+                        exit(0);
                     case SDL_SCANCODE_ESCAPE:
                         // quit
                         exit(0);
+                    case SDL_SCANCODE_F11:
+                        // toggle fullscreen
+                        set_win_fullscreen(!state.win_fullscreen);
+                        render_window();
+                        break;
                     case SDL_SCANCODE_PAGEUP:
                         // prev
                         load_next_image(true);
