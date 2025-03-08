@@ -70,7 +70,6 @@ struct State {
     float win_pre_mv_cur_y;
     char win_fullscreen;
     SDL_Renderer* renderer;
-    SDL_Surface* image_surface;
     SDL_Texture* image_texture;
     int img_w;
     int img_h;
@@ -201,25 +200,21 @@ void view_reset() {
 }
 
 void load_image() {
-    // decode image into surface, get its dimensions and create texture from it
-    // SDL surface is in RAM, texture is in VRAM (and uses less CPU for processing)
-    // IMG_LoadTexture() creates tmp surface, too
-    //state.image_texture = IMG_LoadTexture(state.renderer, state.file_load_path);
-    state.image_surface = IMG_Load(state.file_load_path);
-    if (state.image_surface == NULL) {
-        // do not pollute logs; currently load_image can be called unsuccessfully for many irrelevant files when handling prev/next
-        //SDL_Log("IMG_Load failed");
+    // SDL has SDL_Surface which is pixmap in process mem used for software manipulation and rendering and SDL_Texture which describes entity owned by graphics hardware driver used for hardware accelerated rendering
+    // IMG_LoadTexture() shortcut fuction internally decodes image into SDL_Surface and calls SDL_CreateTextureFromSurface(); we can use it as long as we don't need to manipulate intermediate SDL_Surface
+    if (state.image_texture != NULL) {
+        SDL_DestroyTexture(state.image_texture);
+    }
+    state.image_texture = IMG_LoadTexture(state.renderer, state.file_load_path);
+    if (state.image_texture == NULL) {
+        // do not pollute logs; currently load_image() can be called unsuccessfully for many irrelevant files when handling prev/next
+        //SDL_Log("IMG_LoadTexture failed");
         state.file_load_success = false;
         return;
     }
     state.file_load_success = true;
-    state.img_w = state.image_surface->w;
-    state.img_h = state.image_surface->h;
-    if (state.image_texture != NULL) {
-        SDL_DestroyTexture(state.image_texture);
-    }
-    state.image_texture = SDL_CreateTextureFromSurface(state.renderer, state.image_surface);
-    SDL_DestroySurface(state.image_surface);
+    state.img_w = state.image_texture->w;
+    state.img_h = state.image_texture->h;
     // TODO default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect rendering at zoom level 0 (1:1 scale)
     if (!SDL_SetTextureScaleMode(state.image_texture, SDL_SCALEMODE_NEAREST)) {
         SDL_Log("SDL_SetTextureScaleMode failed: %s", SDL_GetError());
@@ -391,7 +386,7 @@ void load_next_image(bool reverse) {
             SDL_Log("failed to fill filelist");
             load_image();
             if (!state.file_load_success) {
-                SDL_Log("IMG_Load failed; failed to reload file");
+                SDL_Log("IMG_LoadTexture failed; failed to reload file");
                 view_reset();
             }
             return;
@@ -405,7 +400,7 @@ void load_next_image(bool reverse) {
         load_image();
     } while (!state.file_load_success && state.filelist_load_i!=filelist_load_i_saved);
     if (!state.file_load_success) {
-        SDL_Log("IMG_Load failed; wrapped around filelist and failed to load any file");
+        SDL_Log("IMG_LoadTexture failed; wrapped around filelist and failed to load any file");
         view_reset();
     }
 }
@@ -445,7 +440,7 @@ int main(int argc, char** argv)
     }
     load_image();
     if (!state.file_load_success) {
-        SDL_Log("IMG_Load failed; failed to load initial file");
+        SDL_Log("IMG_LoadTexture failed; failed to load initial file");
         exit(1);
     }
     // event loop
