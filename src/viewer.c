@@ -50,6 +50,7 @@
 // TODO ensure SDL functions error handling
 // TODO ensure SDL heap-allocated resources freeing (maybe not for process-lifelong, but image reloading can make some of them limited-liftime)
 // TODO is it nessessary to call SDL_DestroyWindow() or smth else before exit()? See also SDL_Quit(), atexit()
+// TODO add macro to "call function, check return val, log err and exit in case of failure" for bool SDL functions which return false in case of failure and set err
 
 struct State {
     // cur x, y: coords of current point (under cursor)
@@ -172,9 +173,15 @@ void render_window() {
     }
     // copy image to presentation area in renderer backbuffer
     // TODO ensure that clipping is done correctly without overhead
-    SDL_RenderTextureRotated(state.renderer, state.image_texture, NULL, &view_rect, state.view_rotate_angle_q*90, NULL, state.view_mirror ? (state.view_rotate_angle_q%2 ? SDL_FLIP_VERTICAL : SDL_FLIP_HORIZONTAL) : SDL_FLIP_NONE);
+    if (!SDL_RenderTextureRotated(state.renderer, state.image_texture, NULL, &view_rect, state.view_rotate_angle_q*90, NULL, state.view_mirror ? (state.view_rotate_angle_q%2 ? SDL_FLIP_VERTICAL : SDL_FLIP_HORIZONTAL) : SDL_FLIP_NONE)) {
+        SDL_Log("SDL_RenderTextureRotated failed: %s", SDL_GetError());
+        exit(1);
+    }
     // copy renderer backbuffer to frontbuffer
-    SDL_RenderPresent(state.renderer);
+    if (!SDL_RenderPresent(state.renderer)) {
+        SDL_Log("SDL_RenderPresent failed: %s", SDL_GetError());
+        exit(1);
+    }
 }
 
 // reset view_rect to initial scale and position
@@ -199,7 +206,7 @@ void load_image() {
     // IMG_LoadTexture() creates tmp surface, too
     //state.image_texture = IMG_LoadTexture(state.renderer, state.file_load_path);
     state.image_surface = IMG_Load(state.file_load_path);
-    if (NULL == state.image_surface) {
+    if (state.image_surface == NULL) {
         // do not pollute logs; currently load_image can be called unsuccessfully for many irrelevant files when handling prev/next
         //SDL_Log("IMG_Load failed");
         state.file_load_success = false;
@@ -208,11 +215,16 @@ void load_image() {
     state.file_load_success = true;
     state.img_w = state.image_surface->w;
     state.img_h = state.image_surface->h;
-    SDL_DestroyTexture(state.image_texture);
+    if (state.image_texture != NULL) {
+        SDL_DestroyTexture(state.image_texture);
+    }
     state.image_texture = SDL_CreateTextureFromSurface(state.renderer, state.image_surface);
     SDL_DestroySurface(state.image_surface);
     // TODO default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect rendering at zoom level 0 (1:1 scale)
-    SDL_SetTextureScaleMode(state.image_texture, SDL_SCALEMODE_NEAREST);
+    if (!SDL_SetTextureScaleMode(state.image_texture, SDL_SCALEMODE_NEAREST)) {
+        SDL_Log("SDL_SetTextureScaleMode failed: %s", SDL_GetError());
+        exit(1);
+    }
     // update window title
     // TODO chdir early and always have bare filename in state.file_load_path?
     // TODO on Plasma Wayland window title is split by dash separator and 1st part is displayed in taskbar as filename; appname displayed in taskbar is taken from elsewhere, if app is launched via .desktop file it's Name, if app binary is launched directly it is Name from .desktop file with same binary or icon filename, if no such .desktop file found it is binary filename, if path to binary starts with '.' appname is not displayed at all
@@ -243,10 +255,19 @@ void set_win_fullscreen(bool win_fullscreen) {
     state.win_fullscreen = win_fullscreen;
     // TODO clear window?
     // TODO on Plasma Wayland, shell UI isn't hidden/shown after this; happens upon render_window() call after another event
-    SDL_SetWindowFullscreen(state.window, win_fullscreen);
+    if (!SDL_SetWindowFullscreen(state.window, win_fullscreen)) {
+        SDL_Log("SDL_SetWindowFullscreen failed: %s", SDL_GetError());
+        exit(1);
+    }
     // assuming that window size can change because of shell UI
-    SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
-    SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, win_fullscreen ? SDL_ALPHA_OPAQUE : SDL_ALPHA_TRANSPARENT);
+    if (!SDL_GetWindowSize(state.window, &state.win_w, &state.win_h)) {
+        SDL_Log("SDL_GetWindowSize failed: %s", SDL_GetError());
+        exit(1);
+    }
+    if (!SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, win_fullscreen ? SDL_ALPHA_OPAQUE : SDL_ALPHA_TRANSPARENT)) {
+        SDL_Log("SDL_SetRenderDrawColor failed: %s", SDL_GetError());
+        exit(1);
+    }
 }
 
 // before calling this, update win_cur_x, _y
@@ -392,7 +413,10 @@ void load_next_image(bool reverse) {
 // TODO consider moving to SDL3 callbacks
 int main(int argc, char** argv)
 {
-    SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_SCALE_TO_DISPLAY, "1");
+    if (!SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_SCALE_TO_DISPLAY, "1")) {
+        SDL_Log("SDL_SetHint failed: %s", SDL_GetError());
+        exit(1);
+    }
     init_state();
     if( argc < 2 ) {
         state.file_dialog_semaphore = SDL_CreateSemaphore(0);
