@@ -93,22 +93,20 @@ void init_state() {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         exit(1);
     }
-    int display_count;
-    SDL_DisplayID* displays = SDL_GetDisplays(&display_count); // free
-    if(displays == NULL) {
-        SDL_Log("SDL_GetDisplays failed: %s", SDL_GetError());
+    SDL_DisplayID display = SDL_GetPrimaryDisplay();
+    if(!display) {
+        SDL_Log("SDL_GetPrimaryDisplay failed: %s", SDL_GetError());
         exit(1);
     }
-    if (!display_count) {
-        SDL_Log("SDL_GetDisplays returned 0 displays");
-        exit(1);
-    }
-    const SDL_DisplayMode* display_mode = SDL_GetDesktopDisplayMode(displays[0]); // free: this doesn't allocate mem, returns pointer to global
+    // TODO use SDL_GetDisplayBounds() and SDL_GetDisplayUsableBounds()?
+    // on Plasma Wayland with Wayland backend SDL_GetDisplayUsableBounds() reports same size as display mode, with X11/XWayland backend it reports incorrect values which seem to be correct size (display mode size minus taskbar) divided by wrong scaling factor (1.2 when I have it set to 1.5, also with X11/XWayland backend app is not scaled by default, so applying scaling factor here makes no sense)
+    const SDL_DisplayMode* display_mode = SDL_GetDesktopDisplayMode(display); // free: this doesn't allocate mem, returns pointer to global
     if (display_mode == NULL) {
         SDL_Log("SDL_GetDesktopDisplayMode failed: %s", SDL_GetError());
         exit(1);
     }
-    SDL_free(displays);
+    // TODO is window created on primary display?
+    // SDL2 SDL_CreateWindow() had x, y position parameters seemingly assuming global desktop coordinate system so that x, y from SDL_GetDisplayBounds() could be used to request compositor to place window at the top left corner of the given display (if implemented in protocol and SDL backend); SDL3 doesn't have them anymore
     if (!SDL_CreateWindowAndRenderer(APP_NAME, display_mode->w, display_mode->h, SDL_WINDOW_BORDERLESS|SDL_WINDOW_MAXIMIZED|SDL_WINDOW_TRANSPARENT, &state.window, &state.renderer)) {
         SDL_Log("SDL_CreateWindowAndRenderer failed: %s", SDL_GetError());
         exit(1);
@@ -228,7 +226,7 @@ void load_image() {
     // update window title
     // TODO chdir early and always have bare filename in state.file_load_path?
     // TODO on Plasma Wayland window title is split by dash separator and 1st part is displayed in taskbar as filename; appname displayed in taskbar is taken from elsewhere, if app is launched via .desktop file it's Name, if app binary is launched directly it is Name from .desktop file with same binary or icon filename, if no such .desktop file found it is binary filename, if path to binary starts with '.' appname is not displayed at all
-    // TODO if X11 SDL video driver is used and em dash is used as separator (stored as its UTF8 repr in source) title is not updated at all, XWayland bug?
+    // TODO with X11/XWayland backend if em dash is used as separator (stored as its UTF8 repr in source) title is not updated at all, XWayland bug?
     char* filename = strrchr(state.file_load_path, PATH_SEP);
     if (filename == NULL) {
         filename = state.file_load_path;
