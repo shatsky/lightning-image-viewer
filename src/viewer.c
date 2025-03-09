@@ -58,9 +58,6 @@ struct State {
     char* file_load_path;
     bool file_load_success;
     SDL_Semaphore* file_dialog_semaphore;
-    int display_count;
-    SDL_DisplayID* displays;
-    const SDL_DisplayMode* display_mode;
     SDL_Window* window;
     int win_w;
     int win_h;
@@ -96,28 +93,37 @@ void init_state() {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         exit(1);
     }
-    state.displays = SDL_GetDisplays(&state.display_count); // free:
-    if(!state.display_count) {
+    int display_count;
+    SDL_DisplayID* displays = SDL_GetDisplays(&display_count); // free
+    if(displays == NULL) {
         SDL_Log("SDL_GetDisplays failed: %s", SDL_GetError());
         exit(1);
     }
-    state.display_mode = SDL_GetDesktopDisplayMode(state.displays[0]); // free:
-    if (NULL==state.display_mode) {
+    if (!display_count) {
+        SDL_Log("SDL_GetDisplays returned 0 displays");
+        exit(1);
+    }
+    const SDL_DisplayMode* display_mode = SDL_GetDesktopDisplayMode(displays[0]); // free: this doesn't allocate mem, returns pointer to global
+    if (display_mode == NULL) {
         SDL_Log("SDL_GetDesktopDisplayMode failed: %s", SDL_GetError());
         exit(1);
     }
-    if (!SDL_CreateWindowAndRenderer(APP_NAME, state.display_mode->w, state.display_mode->h, SDL_WINDOW_BORDERLESS|SDL_WINDOW_MAXIMIZED|SDL_WINDOW_TRANSPARENT, &state.window, &state.renderer)) {
+    SDL_free(displays);
+    if (!SDL_CreateWindowAndRenderer(APP_NAME, display_mode->w, display_mode->h, SDL_WINDOW_BORDERLESS|SDL_WINDOW_MAXIMIZED|SDL_WINDOW_TRANSPARENT, &state.window, &state.renderer)) {
         SDL_Log("SDL_CreateWindowAndRenderer failed: %s", SDL_GetError());
         exit(1);
     }
-    SDL_GetWindowSize(state.window, &state.win_w, &state.win_h);
+    if (!SDL_GetWindowSize(state.window, &state.win_w, &state.win_h)) {
+        SDL_Log("SDL_GetWindowSize failed: %s", SDL_GetError());
+        exit(1);
+    }
     state.win_fullscreen = false;
     state.image_texture = NULL;
     state.filelist = NULL;
 }
 
 static void SDLCALL file_dialog_callback(void* userdata, const char * const *filelist, int filter) {
-    if (NULL == filelist) {
+    if (filelist == NULL) {
         SDL_Log("SDL_ShowOpenFileDialog failed: %s", SDL_GetError());
         exit(1);
     } else {
@@ -152,7 +158,6 @@ void render_window() {
     // for non-fullscreen simply render with state values, but for fullscreen set view_rect values to fit to screen; using temporary local view_rect because we want state.view_rect values preserved for subsequent switch to non-fullscreen, and, with only transformations available in fullscreen being mirror and rotate, setting fullscreen view_rect values doesn't depend on previous fullscreen view_rect values
     SDL_FRect view_rect;
     if (state.win_fullscreen) {
-        // TODO use state.display_mode->w, state.display_mode->h ?
         // SDL_RenderTextureRotated() draws as if view_rect itself is rotated around its center; in non-fullscreen this is what we want, but in fullscreen we want it to fit to screen, so we have to set such view_rect values that it fits to screen when rotated; using temporary local conditionally-swapped win_w and win_h for setting view_rect.w and view_rect.h
         int win_w = state.view_rotate_angle_q%2 ? state.win_h : state.win_w;
         int win_h = state.view_rotate_angle_q%2 ? state.win_w : state.win_h;
