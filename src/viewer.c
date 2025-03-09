@@ -100,7 +100,7 @@ void init_state() {
     }
     // TODO use SDL_GetDisplayBounds() and SDL_GetDisplayUsableBounds()?
     // on Plasma Wayland with Wayland backend SDL_GetDisplayUsableBounds() reports same size as display mode, with X11/XWayland backend it reports incorrect values which seem to be correct size (display mode size minus taskbar) divided by wrong scaling factor (1.2 when I have it set to 1.5, also with X11/XWayland backend app is not scaled by default, so applying scaling factor here makes no sense)
-    const SDL_DisplayMode* display_mode = SDL_GetDesktopDisplayMode(display); // free: this doesn't allocate mem, returns pointer to global
+    const SDL_DisplayMode* display_mode = SDL_GetDesktopDisplayMode(display); // free(display_mode): never, this doesn't allocate mem, returns pointer to global
     if (display_mode == NULL) {
         SDL_Log("SDL_GetDesktopDisplayMode failed: %s", SDL_GetError());
         exit(1);
@@ -120,15 +120,30 @@ void init_state() {
     state.filelist = NULL;
 }
 
+// not to confuse SDL filelist provided by SDL here with state.filelist
 static void SDLCALL file_dialog_callback(void* userdata, const char * const *filelist, int filter) {
     if (filelist == NULL) {
         SDL_Log("SDL_ShowOpenFileDialog failed: %s", SDL_GetError());
         exit(1);
     } else {
         for (int i=0; filelist[i]!=NULL; i++) {
-            // TODO free previous?
+            if (state.filelist == NULL) {
+                if (state.file_load_path != NULL) {
+                    free(state.file_load_path);
+                }
+            } else {
+                while (state.filelist_len--) {
+                    free(state.filelist[state.filelist_len]);
+                }
+                free(state.filelist);
+                state.filelist = NULL;
+            }
             // SDL filelist is automatically freed upon callback return
-            state.file_load_path = SDL_strdup(filelist[i]);
+            state.file_load_path = strdup(filelist[i]); // free(state.file_load_path): when filelist is filled or new file is opened
+            if (state.file_load_path == NULL) {
+                SDL_Log("strdup failed");
+                exit(1);
+            }
             SDL_SignalSemaphore(state.file_dialog_semaphore);
             return;
         }
@@ -233,7 +248,7 @@ void load_image() {
     } else {
         filename++;
     }
-    char* win_title = malloc(strlen(filename)+strlen(WIN_TITLE_TAIL)+1);
+    char* win_title = malloc(strlen(filename)+strlen(WIN_TITLE_TAIL)+1); // free(win_title): after window title is updated
     if (win_title == NULL) {
         SDL_Log("malloc failed");
         exit(1);
@@ -355,7 +370,7 @@ void fill_filelist() {
     }
     filename = state.file_load_path;
 
-    state.filelist_len = scandir(".", &state.filelist, scandir_filter_image_files, scandir_compar_mtime); // free
+    state.filelist_len = scandir(".", &state.filelist, scandir_filter_image_files, scandir_compar_mtime); // free(state.filelist): if file not found in directory or when new file is opened
     if (state.filelist_len == -1) {
         SDL_Log("scandir failed: %s", strerror(errno));
     } else {
@@ -435,7 +450,7 @@ int main(int argc, char** argv)
             }
         }
     } else {
-        state.file_load_path = strdup(argv[1]);
+        state.file_load_path = strdup(argv[1]); // free(state.file_load_path): when filelist is filled or new file is opened
         if (state.file_load_path == NULL) {
             SDL_Log("strdup failed");
             exit(1);
