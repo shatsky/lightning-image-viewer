@@ -161,10 +161,17 @@ void set_zoom_level(int view_zoom_level) {
     state.view_zoom_level = view_zoom_level;
     // scale = sqrt(2)^zoom_level = 2^(0.5*zoom_level)
     state.view_zoom_scale = pow(2, 0.5 * view_zoom_level);
+    // TODO we absolutely need pixel perfect rendering at 1:1 scale, and we absolutely need interpolation at scales <1:1
+    // default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect at 1:1
     // TODO tried to get pixel perfect rendering at integer scales with SDL_SCALEMODE_LINEAR, does not help
     //if (view_zoom_level%2 == 0) {
     //    state.view_zoom_scale = 1 << (view_zoom_level / 2);
     //}
+    // for now just set SDL_SCALEMODE_NEAREST for scale >=1:1
+    if (!SDL_SetTextureScaleMode(state.image_texture, view_zoom_level < 0 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST)) {
+        SDL_Log("SDL_SetTextureScaleMode failed: %s", SDL_GetError());
+        exit(1);
+    }
     state.view_rect.w = state.img_w * state.view_zoom_scale;
     state.view_rect.h = state.img_h * state.view_zoom_scale;
 }
@@ -237,11 +244,6 @@ void load_image() {
     state.file_load_success = true;
     state.img_w = state.image_texture->w;
     state.img_h = state.image_texture->h;
-    // TODO default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect rendering at zoom level 0 (1:1 scale)
-    if (!SDL_SetTextureScaleMode(state.image_texture, SDL_SCALEMODE_NEAREST)) {
-        SDL_Log("SDL_SetTextureScaleMode failed: %s", SDL_GetError());
-        exit(1);
-    }
     // update window title
     // TODO chdir early and always have bare filename in state.file_load_path?
     // TODO on Plasma Wayland window title is split by dash separator and 1st part is displayed in taskbar as filename; appname displayed in taskbar is taken from elsewhere, if app is launched via .desktop file it's Name, if app binary is launched directly it is Name from .desktop file with same binary or icon filename, if no such .desktop file found it is binary filename, if path to binary starts with '.' appname is not displayed at all
