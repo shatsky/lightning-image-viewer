@@ -161,17 +161,10 @@ void set_zoom_level(int view_zoom_level) {
     state.view_zoom_level = view_zoom_level;
     // scale = sqrt(2)^zoom_level = 2^(0.5*zoom_level)
     state.view_zoom_scale = pow(2, 0.5 * view_zoom_level);
-    // TODO we absolutely need pixel perfect rendering at 1:1 scale, and we absolutely need interpolation at scales <1:1
-    // default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect at 1:1
     // TODO tried to get pixel perfect rendering at integer scales with SDL_SCALEMODE_LINEAR, does not help
     //if (view_zoom_level%2 == 0) {
     //    state.view_zoom_scale = 1 << (view_zoom_level / 2);
     //}
-    // for now just set SDL_SCALEMODE_NEAREST for scale >=1:1
-    if (!SDL_SetTextureScaleMode(state.image_texture, view_zoom_level < 0 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST)) {
-        SDL_Log("SDL_SetTextureScaleMode failed: %s", SDL_GetError());
-        exit(1);
-    }
     state.view_rect.w = state.img_w * state.view_zoom_scale;
     state.view_rect.h = state.img_h * state.view_zoom_scale;
 }
@@ -198,6 +191,14 @@ void render_window() {
         view_rect.y = (state.win_h - view_rect.h) / 2;
     } else {
         view_rect = state.view_rect;
+    }
+    // TODO we absolutely need pixel perfect rendering at 1:1 scale, and we absolutely need interpolation at scales <1:1
+    // default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect at 1:1
+    // for now just set SDL_SCALEMODE_NEAREST for scale >=1:1
+    // not in set_zoom_level() because it's not called when toggling fullscreen
+    if (!SDL_SetTextureScaleMode(state.image_texture, view_rect.w < state.img_w ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST)) {
+        SDL_Log("SDL_SetTextureScaleMode failed: %s", SDL_GetError());
+        exit(1);
     }
     // copy image to presentation area in renderer backbuffer
     // TODO ensure that clipping is done correctly without overhead
