@@ -30,6 +30,10 @@
 #define APP_NAME "Lightning Image Viewer"
 #define WIN_TITLE_TAIL " - " APP_NAME
 
+// amount of pixels to pan when pressing an arrow key
+// leaflet.js keyboardPanDelta default value is 80 https://leafletjs.com/reference.html
+#define KEYBOARD_PAN_DELTA 40
+
 #ifndef _WIN32
     #define PATH_SEP '/'
 #else
@@ -283,6 +287,7 @@ void set_win_fullscreen(bool win_fullscreen) {
     }
 }
 
+// save coords at start of move (drag) action which are used to update view_rect pos upon mouse motion; also has to be called if view_rect is changed by other action (zoom) during move
 // before calling this, update win_cur_x, _y
 void save_pre_mv_coords() {
     state.view_rect_pre_mv_x = state.view_rect.x;
@@ -291,8 +296,9 @@ void save_pre_mv_coords() {
     state.win_pre_mv_cur_y = state.win_cur_y;
 }
 
-// zoom with preserving current image point under cursor
-void view_zoom_to_level(int view_zoom_level) {
+// zoom with preserving image point currently under cursor
+// used as mouse zoom action
+void view_zoom_to_level_at_cursor(int view_zoom_level) {
     if (state.win_fullscreen) {
         set_win_fullscreen(false);
     }
@@ -302,14 +308,30 @@ void view_zoom_to_level(int view_zoom_level) {
     set_zoom_level(view_zoom_level);
     state.view_rect.x = state.win_cur_x - state.img_cur_x * state.view_zoom_scale;
     state.view_rect.y = state.win_cur_y - state.img_cur_y * state.view_zoom_scale;
-    // TODO cursor still loses current image point when zooming while dragging
+    // TODO does cursor still lose current image point when zooming while dragging?
     save_pre_mv_coords();
     render_window();
 }
 
-// move view_rect from pos corresponding to saved pre_mv cursor pos to current pos
-void view_move() {
-    // ignore new move events until current is processed
+// zoom with preserving image point currently in the center of window
+// used as keyboard zoom action
+void view_zoom_to_level_at_center(int view_zoom_level) {
+    if (state.win_fullscreen) {
+        set_win_fullscreen(false);
+    }
+    float img_center_x = (state.win_w / 2 - state.view_rect.x) / state.view_zoom_scale;
+    float img_center_y = (state.win_h / 2 - state.view_rect.y) / state.view_zoom_scale;
+    set_zoom_level(view_zoom_level);
+    state.view_rect.x = state.win_w / 2 - img_center_x * state.view_zoom_scale;
+    state.view_rect.y = state.win_h / 2 - img_center_y * state.view_zoom_scale;
+    save_pre_mv_coords();
+    render_window();
+}
+
+// move view_rect from pre_mv pos by vector of cursor movement from pre_mv to current coords
+// used as mouse move action
+void view_move_from_pre_mv_by_cursor_mv() {
+    // ignore new motion events until current one is processed (to prevent accumulation of events in queue and image movement lag behind cursor which can happen if app has to redraw for each motion event)
     SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION, false);
     if (state.win_fullscreen) {
         set_win_fullscreen(false);
@@ -318,6 +340,17 @@ void view_move() {
     state.view_rect.y = state.view_rect_pre_mv_y + (state.win_cur_y - state.win_pre_mv_cur_y);
     render_window();
     SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION, true);
+}
+
+// move view_rect by vector
+// used as keyboard move action
+void view_move_by_vector(float x, float y) {
+    if (state.win_fullscreen) {
+        set_win_fullscreen(false);
+    }
+    state.view_rect.x += x;
+    state.view_rect.y += y;
+    render_window();
 }
 
 // helper functions for scandir() which is called in fill_filelist() to get list of image files sorted by mtime
@@ -470,7 +503,7 @@ int main(int argc, char** argv)
         switch (event.type) {
             case SDL_EVENT_MOUSE_WHEEL:
                 if (event.wheel.y != 0) {
-                    view_zoom_to_level(event.wheel.y>0 ? state.view_zoom_level+1 : state.view_zoom_level-1);
+                    view_zoom_to_level_at_cursor(event.wheel.y>0 ? state.view_zoom_level+1 : state.view_zoom_level-1);
                     should_exit_on_lmousebtn_release = false;
                 }
                 break;
@@ -478,7 +511,7 @@ int main(int argc, char** argv)
                 if (lmousebtn_pressed) {
                     state.win_cur_x = event.motion.x;
                     state.win_cur_y = event.motion.y;
-                    view_move();
+                    view_move_from_pre_mv_by_cursor_mv();
                     should_exit_on_lmousebtn_release = false;
                 }
                 break;
@@ -531,12 +564,24 @@ int main(int argc, char** argv)
                         state.view_rotate_angle_q = (state.view_rotate_angle_q + (state.view_mirror ? 3 : 1)) % 4;
                         render_window();
                         break;
+                    case SDL_SCANCODE_0:
+                        // zoom 1:1
+                        view_zoom_to_level_at_center(0);
+                        break;
                     case SDL_SCANCODE_RETURN:
                         // quit
                         exit(0);
                     case SDL_SCANCODE_ESCAPE:
                         // quit
                         exit(0);
+                    case SDL_SCANCODE_MINUS:
+                        // zoom out
+                        view_zoom_to_level_at_center(state.view_zoom_level-1);
+                        break;
+                    case SDL_SCANCODE_EQUALS:
+                        // zoom in
+                        view_zoom_to_level_at_center(state.view_zoom_level+1);
+                        break;
                     case SDL_SCANCODE_F11:
                         // toggle fullscreen
                         set_win_fullscreen(!state.win_fullscreen);
@@ -549,6 +594,22 @@ int main(int argc, char** argv)
                     case SDL_SCANCODE_PAGEDOWN:
                         // next
                         load_next_image(false);
+                        break;
+                    case SDL_SCANCODE_RIGHT:
+                        // move right
+                        view_move_by_vector(-KEYBOARD_PAN_DELTA, 0);
+                        break;
+                    case SDL_SCANCODE_LEFT:
+                        // move left
+                        view_move_by_vector(KEYBOARD_PAN_DELTA, 0);
+                        break;
+                    case SDL_SCANCODE_DOWN:
+                        // move down
+                        view_move_by_vector(0, -KEYBOARD_PAN_DELTA);
+                        break;
+                    case SDL_SCANCODE_UP:
+                        // move up
+                        view_move_by_vector(0, KEYBOARD_PAN_DELTA);
                         break;
                 }
                 break;
