@@ -93,12 +93,12 @@ struct State {
 void init_state() {
     // TODO current display in multi monitor setup?
     // TODO does it make sense that SDL requires window size with SDL_WINDOW_MAXIMIZED?
-    if (!SDL_Init(SDL_INIT_VIDEO)){
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         exit(1);
     }
     SDL_DisplayID display = SDL_GetPrimaryDisplay();
-    if(!display) {
+    if (!display) {
         SDL_Log("SDL_GetPrimaryDisplay failed: %s", SDL_GetError());
         exit(1);
     }
@@ -171,7 +171,10 @@ void set_zoom_level(int view_zoom_level) {
 
 // redraw window contents with current state
 void render_window() {
-    SDL_RenderClear(state.renderer);
+    if (!SDL_RenderClear(state.renderer)) {
+        SDL_Log("SDL_RenderClear failed: %s", SDL_GetError());
+        exit(1);
+    }
     // for non-fullscreen simply render with state values, but for fullscreen set view_rect values to fit to screen; using temporary local view_rect because we want state.view_rect values preserved for subsequent switch to non-fullscreen, and, with only transformations available in fullscreen being mirror and rotate, setting fullscreen view_rect values doesn't depend on previous fullscreen view_rect values
     SDL_FRect view_rect;
     if (state.win_fullscreen) {
