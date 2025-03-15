@@ -1,0 +1,161 @@
+name: workflow-release
+
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: The name of the tag for this release
+        required: true
+      draft:
+        description: true to create a draft (unpublished) release, false to create a published one
+        required: true
+        default: true
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  attestations: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: workflow-release
+  cancel-in-progress: false
+
+jobs:
+  job-release:
+    # TODO from "Simple workflow for deploying static content to GitHub Pages" example, is it needed?
+    #environment:
+    #  name: github-pages
+    #  url: ${{ steps.deploy_pages.outputs.page_url }}
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:25.04
+    env:
+      SDL_VER: 3.2.8
+      SDL_IMAGE_VER: 3.2.4
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: step-pre
+        run: |
+          if [ $(uname -m) != "x86_64" ]; then
+            echo "Error: machine is not x86_64"
+            exit 1
+          fi
+          apt update
+
+      - name: step-checkout
+        uses: actions/checkout@v2
+        with:
+          path: lightning-image-viewer
+
+      - name: step-build-ubuntu
+        run: |
+          apt install -y gcc libsdl3-dev libsdl3-image-dev
+          mkdir -p lightning-image-viewer_${GITHUB_REF_NAME}_amd64/usr/bin lightning-image-viewer_${GITHUB_REF_NAME}_amd64/DEBIAN
+          gcc lightning-image-viewer/src/viewer.c -lSDL3 -lSDL3_image -lm -o lightning-image-viewer_${GITHUB_REF_NAME}_amd64/usr/bin/lightning-image-viewer
+          cp -a lightning-image-viewer/share lightning-image-viewer_${GITHUB_REF_NAME}_amd64/usr
+          sed "s/^Version:.*/Version: $GITHUB_REF_NAME/" lightning-image-viewer/src/control.in > lightning-image-viewer_${GITHUB_REF_NAME}_amd64/DEBIAN/control
+          dpkg --build lightning-image-viewer_${GITHUB_REF_NAME}_amd64
+
+      - name: step-build-windows
+        run: |
+          apt install -y gcc-mingw-w64 imagemagick zip unzip curl
+          if [ ! -d SDL3-devel-$SDL_VER-mingw ]; then
+            mkdir SDL3-devel-$SDL_VER-mingw
+            curl --location https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-devel-$SDL_VER-mingw.tar.gz | tar --extract --gzip --directory SDL3-devel-$SDL_VER-mingw
+          fi
+          if [ ! -d SDL3_image-devel-$SDL_IMAGE_VER-mingw ]; then
+            mkdir SDL3_image-devel-$SDL_IMAGE_VER-mingw
+            curl --location https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-devel-$SDL_IMAGE_VER-mingw.tar.gz | tar --extract --gzip --directory SDL3_image-devel-$SDL_IMAGE_VER-mingw
+          fi
+          magick lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg lightning-image-viewer.ico
+          x86_64-w64-mingw32-windres lightning-image-viewer/src/viewer.rc icon.o
+          x86_64-w64-mingw32-gcc lightning-image-viewer/src/viewer.c icon.o -ISDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/include -ISDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/include -LSDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/lib -LSDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/lib -l:libSDL3.dll.a -l:libSDL3_image.dll.a -mwindows -o lightning-image-viewer.exe
+          if [ ! -f SDL3_image-$SDL_IMAGE_VER-win32-x64.zip ]; then
+            curl --location --remote-name https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER-win32-x64.zip
+          fi
+          if [ ! -d SDL3_image-$SDL_IMAGE_VER-win32-x64 ]; then
+            mkdir SDL3_image-$SDL_IMAGE_VER-win32-x64
+            unzip -d SDL3_image-$SDL_IMAGE_VER-win32-x64 SDL3_image-$SDL_IMAGE_VER-win32-x64.zip
+          fi
+          zip -j lightning-image-viewer-$GITHUB_REF_NAME-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll lightning-image-viewer/README.md
+
+      - name: step-build-emscripten
+        run: |
+          apt install -y emscripten cmake
+          if [ ! -d SDL3-$SDL_VER ]; then
+            mkdir SDL3-$SDL_VER
+            curl --location https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-$SDL_VER.tar.gz | tar --extract --gzip --directory SDL3-$SDL_VER
+          fi
+          if [ ! -d SDL3_image-$SDL_IMAGE_VER ]; then
+            mkdir SDL3_image-$SDL_IMAGE_VER
+            curl --location https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER.tar.gz | tar --extract --gzip --directory SDL3_image-$SDL_IMAGE_VER
+          fi
+          mkdir -p SDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten
+          cd SDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten
+          emcmake cmake ..
+          emmake make -j4
+          cd ../../..
+          mkdir -p SDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten
+          cd SDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten
+          emcmake cmake .. -DSDL3_DIR=$GITHUB_WORKSPACE/SDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten
+          emmake make -j4
+          cd ../../..
+          mkdir -p pages
+          emcc -ISDL3-$SDL_VER/SDL3-$SDL_VER/include -ISDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/include -LSDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten -LSDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten -lSDL3 -lSDL3_image -sEXPORTED_RUNTIME_METHODS="['callMain']" -sASYNCIFY -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH lightning-image-viewer/src/viewer.c -o pages/lightning-image-viewer.js
+          cp -a lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg pages
+          sed "s?{{ GITHUB_SHA }}?$GITHUB_SHA?g;s?{{ GITHUB_REF }}?$GITHUB_REF?g" lightning-image-viewer/src/index.html.in > pages/index.html
+
+      - name: step-provenance-attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            lightning-image-viewer_${{ github.ref_name }}_amd64
+            lightning-image-viewer-${{ github.ref_name }}-win32-x64.zip
+
+      - name: step-create-release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.event.inputs.tag_name }}
+          release_name: ${{ github.event.inputs.release_name }}
+          draft: ${{ github.event.inputs.draft }}
+
+      - name: step-upload-ubuntu
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: lightning-image-viewer_${{ github.ref_name }}_amd64.deb
+          asset_name: lightning-image-viewer_${{ github.ref_name }}_amd64.deb
+          asset_content_type: application/vnd.debian.binary-package
+
+      - name: step-upload-windows
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: lightning-image-viewer-${{ github.ref_name }}-win32-x64.zip
+          asset_name: lightning-image-viewer-${{ github.ref_name }}-win32-x64.zip
+          asset_content_type: application/zip
+
+      - name: step-pages-setup
+        uses: actions/configure-pages@v5
+
+      - name: step-pages-upload-artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+      - name: step-pages-deploy-to-github
+        id: deploy_pages
+        uses: actions/deploy-pages@v4
