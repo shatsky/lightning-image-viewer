@@ -44,7 +44,7 @@
       <li>all conscious humans who don't copypaste valuable lossy-compressed images as pixmaps (which causes loss of compression and addition of new compression artifacts upon repeated lossy compression) but share them as files</li>
     </ul>
 
-    <p>Built from commit {{ GITHUB_SHA }} on ref {{ GITHUB_REF }}</p>
+    <p>Built from commit {{ GITHUB_SHA }} with tag {{ TAG_NAME }}</p>
 
     <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1 style="position: fixed; top:0; left:0" width="0" height="0"></canvas>
 

@@ -38,6 +38,7 @@ jobs:
       SDL_VER: 3.2.8
       SDL_IMAGE_VER: 3.2.4
       DEBIAN_FRONTEND: noninteractive
+      TAG_NAME: ${{ github.event.inputs.tag_name }}
 
     steps:
       - name: step-pre
@@ -56,11 +57,11 @@ jobs:
       - name: step-build-ubuntu
         run: |
           apt install -y gcc libsdl3-dev libsdl3-image-dev
-          mkdir -p lightning-image-viewer_${GITHUB_REF_NAME}_amd64/usr/bin lightning-image-viewer_${GITHUB_REF_NAME}_amd64/DEBIAN
-          gcc lightning-image-viewer/src/viewer.c -lSDL3 -lSDL3_image -lm -o lightning-image-viewer_${GITHUB_REF_NAME}_amd64/usr/bin/lightning-image-viewer
-          cp -a lightning-image-viewer/share lightning-image-viewer_${GITHUB_REF_NAME}_amd64/usr
-          sed "s/^Version:.*/Version: $GITHUB_REF_NAME/" lightning-image-viewer/src/control.in > lightning-image-viewer_${GITHUB_REF_NAME}_amd64/DEBIAN/control
-          dpkg --build lightning-image-viewer_${GITHUB_REF_NAME}_amd64
+          mkdir -p lightning-image-viewer_${TAG_NAME}_amd64/usr/bin lightning-image-viewer_${TAG_NAME}_amd64/DEBIAN
+          gcc lightning-image-viewer/src/viewer.c -lSDL3 -lSDL3_image -lm -o lightning-image-viewer_${TAG_NAME}_amd64/usr/bin/lightning-image-viewer
+          cp -a lightning-image-viewer/share lightning-image-viewer_${TAG_NAME}_amd64/usr
+          sed "s/^Version:.*/Version: $TAG_NAME/" lightning-image-viewer/src/control.in > lightning-image-viewer_${TAG_NAME}_amd64/DEBIAN/control
+          dpkg --build lightning-image-viewer_${TAG_NAME}_amd64
 
       - name: step-build-windows
         run: |
@@ -83,7 +84,7 @@ jobs:
             mkdir SDL3_image-$SDL_IMAGE_VER-win32-x64
             unzip -d SDL3_image-$SDL_IMAGE_VER-win32-x64 SDL3_image-$SDL_IMAGE_VER-win32-x64.zip
           fi
-          zip -j lightning-image-viewer-$GITHUB_REF_NAME-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll lightning-image-viewer/README.md
+          zip -j lightning-image-viewer-$TAG_NAME-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll lightning-image-viewer/README.md
 
       - name: step-build-emscripten
         run: |
@@ -109,7 +110,7 @@ jobs:
           mkdir -p pages
           emcc -ISDL3-$SDL_VER/SDL3-$SDL_VER/include -ISDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/include -LSDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten -LSDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten -lSDL3 -lSDL3_image -sEXPORTED_RUNTIME_METHODS="['callMain']" -sASYNCIFY -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH lightning-image-viewer/src/viewer.c -o pages/lightning-image-viewer.js
           cp -a lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg pages
-          sed "s?{{ GITHUB_SHA }}?$GITHUB_SHA?g;s?{{ GITHUB_REF }}?$GITHUB_REF?g" lightning-image-viewer/src/index.html.in > pages/index.html
+          sed "s?{{ GITHUB_SHA }}?$GITHUB_SHA?g;s?{{ TAG_NAME }}?$TAG_NAME?g" lightning-image-viewer/src/index.html.in > pages/index.html
 
       - name: step-provenance-attestations
         uses: actions/attest-build-provenance@v2
