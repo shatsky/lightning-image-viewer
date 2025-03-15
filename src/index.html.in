@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Lightning Image Viewer</title>
+    <link rel="icon" type="image/x-icon" href="share/icons/hicolor/scalable/apps/lightning-image-viewer.svg">
+  </head>
+  <body style="font-family: system-ui">
+
+    <img src="lightning-image-viewer.svg">
+
+    <p>Lightning Image Viewer is fast and lightweight free (as in <a href="https://en.wikipedia.org/wiki/Free_and_open-source_software">FOSS</a>) cross-platform desktop image viewing app featuring minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps, written in C with <a href="https://libsdl.org/">SDL3</a>. Detailed description and source code are available on <a href="https://github.com/shatsky/lightning-image-viewer">GitHub</a>. This is primarily demo webpage featuring actual app which is compiled to <a href="https://webassembly.org/">WebAssembly</a> and runs in browser via <a href="https://emscripten.org/">Emscripten</a>. It is launched after image file is selected and renders to canvas, displaying image over webpage content just like native build displays over desktop and handling input events same as native. It should work in all mainstream browsers.</p>
+
+    <p>Image file: <input type="file" id="file_input"></p>
+
+    <p>Controls:</p>
+    <ul>
+      <li>mouse scroll up/down: zoom in/out, preserving image point currently under mouse cursor</li>
+      <li>keyboard =/-/0: zoom in/out/1:1, preserving image point currently in the center of the screen</li>
+      <li>mouse move with left button pressed: pan</li>
+      <li>keyboard Up/Down/Left/Right: pan up/down/left/right</li>
+      <li>mouse middle button click || keyboard F, F11: toggle fullscreen</li>
+      <li>mouse left button click with no move nor zoom between button press and release || keyboard Esc, Q, Enter: close</li>
+      <li>keyboard R/L: rotate 90deg clockwise/counter clockwise</li>
+      <li>keyboard M: mirror horizontally</li>
+      <li>keyboard PgDn/PgUp: <s>prev/next image</s> app running in browser cannot access local filesystem, so this only resets view of opened image</li>
+      <li>touch input handling not implemented</li>
+    </ul>
+
+    <p>Downloads: check <a href="https://github.com/shatsky/lightning-image-viewer/releases">GitHub releases</a></p>
+
+    <p>Feedback: check <a href="https://github.com/shatsky/lightning-image-viewer/issues">GitHub issues</a></p>
+
+    <p>Known issues specific to this demo webpage:</p>
+    <ul>
+      <li>image formats support is limited to formats internally supported by SDL3_image library (BMP, GIF, JPEG, LBM, PCX, PNG, PNM (PPM/PGM/PBM), QOI, TGA, XCF, XPM, and simple SVG format images) (because I didn't bother to build external dependencies needed for AVIF, JPEG-XL, TIFF, and WebP)</li>
+    </ul>
+
+    <p>Special thanks to:</p>
+    <ul>
+      <li>JYKITORS, for constantly supplying me with free (as in beer, not as in speech) delicious sushi (not as in Sushi file previewer for GNOME/Nautilus)</li>
+      <li>ChatGPT (in case it does have consciousness after all), for its time-saving advice, and all humans who created knowledge which it was trained on</li>
+      <li>all conscious humans who don't copypaste valuable lossy-compressed images as pixmaps (which causes loss of compression and addition of new compression artifacts upon repeated lossy compression) but share them as files</li>
+    </ul>
+
+    <p>Built from commit {{ GITHUB_SHA }} on ref {{ GITHUB_REF }}</p>
+
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1 style="position: fixed; top:0; left:0" width="0" height="0"></canvas>
+
+    <script type='text/javascript'>
+      var canvas = document.getElementById('canvas');
+
+      // prevent SDL/Emscripten from enabling browser fullscreen
+      // because in browser fullscreen it scales canvas to fit screen without resizing canvas
+      // we just make it handle viewport-sized canvas as display
+      canvas.requestFullscreen = function() {
+        // it also tries to set black bg color and fails to revert it if we disable browser fullscreen like this
+        // not needed at all with viewport-sized canvas and app filling it with opaque upon fullscreen switch
+        document.body.style.backgroundColor = '';
+        canvas.style.backgroundColor = '';
+        return Promise.resolve();
+      };
+
+      // customize behaviour of Emscripten Module
+      // Emscripten JS will turn this into actual Emscripten Module with methods like .callMain()
+      var Module = {
+        noInitialRun: true,
+        onExit: function(status) {
+          location.reload();
+        }
+      };
+
+      document.getElementById('file_input').addEventListener('change', function(e) {
+        var file = e.target.files[0];
+        var reader = new FileReader();
+        reader.onload = function() {
+          var data = new Uint8Array(reader.result);
+          // copy file to MEMFS
+          // is there path which is guaranteed to be empty to avoid possible collision with existing files?
+          FS.writeFile('/'+file.name, data);
+          // make SDL/Emscripten resize canvas to current page viewport size, not screen size
+          Object.defineProperty(window.screen, 'width', { value: window.innerWidth });
+          Object.defineProperty(window.screen, 'height', { value: window.innerHeight });
+          // launch app
+          Module.callMain(['/'+file.name]);
+        };
+        reader.readAsArrayBuffer(file);
+      });
+    </script>
+    <script async type="text/javascript" src="lightning-image-viewer.js"></script>
+  </body>
+</html>
