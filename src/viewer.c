@@ -359,6 +359,13 @@ void view_move_by_vector(float x, float y) {
     render_window();
 }
 
+// TODO scandir() is "C POSIX library" (superset of "C standard library") and not available in Microsoft C library used by mingw nor in POSIX subset provided by mingw. Options:
+// - build for Windows with something like Cygwin for full POSIX compat
+// - implement separate fill_filelist() for Windows using FindFirstFile()/FindNextFile()/FindClose() (Win32 API)
+// - implement using opendir(), readdir() POSIX functions available in POSIX subset provided by mingw
+// for now, fill_filelist() for Windows is a stub
+#ifndef _WIN32
+
 // helper functions for scandir() which is called in fill_filelist() to get list of image files sorted by mtime
 // TODO get rid of duplicate stat() calls?
 
@@ -434,6 +441,12 @@ void fill_filelist() {
         }
     }
 }
+
+#else
+
+void fill_filelist() {}
+
+#endif
 
 void load_next_image(bool reverse) {
     // filelist is not filled until load_next_image() is called 1st time, to display initial image quicker
