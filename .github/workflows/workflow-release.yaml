@@ -116,8 +116,8 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            lightning-image-viewer_${{ github.ref_name }}_amd64
-            lightning-image-viewer-${{ github.ref_name }}-win32-x64.zip
+            lightning-image-viewer_${{ github.event.inputs.tag_name }}_amd64
+            lightning-image-viewer-${{ github.event.inputs.tag_name }}-win32-x64.zip
 
       - name: step-create-release
         id: create_release
@@ -126,7 +126,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.event.inputs.tag_name }}
-          release_name: ${{ github.event.inputs.release_name }}
+          release_name: ${{ github.event.inputs.tag_name }}
           draft: ${{ github.event.inputs.draft }}
 
       - name: step-upload-ubuntu
@@ -135,8 +135,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: lightning-image-viewer_${{ github.ref_name }}_amd64.deb
-          asset_name: lightning-image-viewer_${{ github.ref_name }}_amd64.deb
+          asset_path: lightning-image-viewer_${{ github.event.inputs.tag_name }}_amd64.deb
+          asset_name: lightning-image-viewer_${{ github.event.inputs.tag_name }}_amd64.deb
           asset_content_type: application/vnd.debian.binary-package
 
       - name: step-upload-windows
@@ -145,8 +145,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: lightning-image-viewer-${{ github.ref_name }}-win32-x64.zip
-          asset_name: lightning-image-viewer-${{ github.ref_name }}-win32-x64.zip
+          asset_path: lightning-image-viewer-${{ github.event.inputs.tag_name }}-win32-x64.zip
+          asset_name: lightning-image-viewer-${{ github.event.inputs.tag_name }}-win32-x64.zip
           asset_content_type: application/zip
 
       - name: step-pages-setup
