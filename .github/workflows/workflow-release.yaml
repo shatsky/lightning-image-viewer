@@ -55,12 +55,18 @@ jobs:
         with:
           path: lightning-image-viewer
 
+      - name: step-build-pre
+        run: |
+          cp -a lightning-image-viewer/README.md .
+          echo "\n---\n\nBuilt from commit $GITHUB_SHA with tag $TAG_NAME" >> README.md
+
       - name: step-build-ubuntu
         run: |
           apt install -y gcc libsdl3-dev libsdl3-image-dev
-          mkdir -p lightning-image-viewer_${TAG_NAME}_amd64/usr/bin lightning-image-viewer_${TAG_NAME}_amd64/DEBIAN
+          mkdir -p lightning-image-viewer_${TAG_NAME}_amd64/usr/bin lightning-image-viewer_${TAG_NAME}_amd64/usr/share/doc/lightning-image-viewer lightning-image-viewer_${TAG_NAME}_amd64/DEBIAN
           gcc lightning-image-viewer/src/viewer.c -lSDL3 -lSDL3_image -lm -o lightning-image-viewer_${TAG_NAME}_amd64/usr/bin/lightning-image-viewer
           cp -a lightning-image-viewer/share lightning-image-viewer_${TAG_NAME}_amd64/usr
+          cp -a README.md lightning-image-viewer_${TAG_NAME}_amd64/usr/share/doc/lightning-image-viewer
           sed "s/^Version:.*/Version: $TAG_NAME/" lightning-image-viewer/src/control.in > lightning-image-viewer_${TAG_NAME}_amd64/DEBIAN/control
           dpkg --build lightning-image-viewer_${TAG_NAME}_amd64
 
@@ -100,7 +106,7 @@ jobs:
 
       - name: step-build-windows-create-archive
         run: |
-          zip -j lightning-image-viewer-$TAG_NAME-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll lightning-image-viewer/README.md
+          zip -j lightning-image-viewer-$TAG_NAME-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll README.md
 
       - name: step-build-emscripten-install-system-deps
         run: |
