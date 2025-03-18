@@ -1,20 +1,21 @@
 name: workflow-release
 
 on:
-  # Allows you to run this workflow manually from the Actions tab
+  # Allow to run workflow manually from the Actions tab
   workflow_dispatch:
-    inputs:
+    inputs: # default type is string, description is displayed in the input label
       tag_name:
-        description: The name of the tag for this release
+        description: Tag name
         required: true
       draft:
-        description: true to create a draft (unpublished) release, false to create a published one
+        description: Draft
+        type: boolean
         required: true
         default: true
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
-  contents: write # required to create draft release
+  contents: write # required for draft release creation, otherwise "read" should have been enough
   pages: write
   id-token: write
   attestations: write
@@ -22,12 +23,12 @@ permissions:
 # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
 # However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
 concurrency:
-  group: workflow-release
+  group: group-workflow-release
   cancel-in-progress: false
 
 jobs:
   job-release:
-    # TODO from "Simple workflow for deploying static content to GitHub Pages" example, is it needed?
+    # TODO from "Simple workflow for deploying static content to GitHub Pages" example, is it useful?
     #environment:
     #  name: github-pages
     #  url: ${{ steps.deploy_pages.outputs.page_url }}
@@ -63,50 +64,74 @@ jobs:
           sed "s/^Version:.*/Version: $TAG_NAME/" lightning-image-viewer/src/control.in > lightning-image-viewer_${TAG_NAME}_amd64/DEBIAN/control
           dpkg --build lightning-image-viewer_${TAG_NAME}_amd64
 
-      - name: step-build-windows
+      - name: step-build-windows-install-system-deps
         run: |
           apt install -y gcc-mingw-w64 imagemagick zip unzip curl
+
+      - name: step-build-windows-get-sdl3
+        run: |
           if [ ! -d SDL3-devel-$SDL_VER-mingw ]; then
             mkdir SDL3-devel-$SDL_VER-mingw
             curl --location https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-devel-$SDL_VER-mingw.tar.gz | tar --extract --gzip --directory SDL3-devel-$SDL_VER-mingw
           fi
+
+      - name: step-build-windows-get-sdl3-image
+        run: |
           if [ ! -d SDL3_image-devel-$SDL_IMAGE_VER-mingw ]; then
             mkdir SDL3_image-devel-$SDL_IMAGE_VER-mingw
             curl --location https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-devel-$SDL_IMAGE_VER-mingw.tar.gz | tar --extract --gzip --directory SDL3_image-devel-$SDL_IMAGE_VER-mingw
           fi
+
+      - name: step-build-windows-build
+        run: |
           magick lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg lightning-image-viewer.ico
           x86_64-w64-mingw32-windres lightning-image-viewer/src/viewer.rc icon.o
           x86_64-w64-mingw32-gcc lightning-image-viewer/src/viewer.c icon.o -ISDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/include -ISDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/include -LSDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/lib -LSDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/lib -l:libSDL3.dll.a -l:libSDL3_image.dll.a -mwindows -o lightning-image-viewer.exe
-          if [ ! -f SDL3_image-$SDL_IMAGE_VER-win32-x64.zip ]; then
-            curl --location --remote-name https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER-win32-x64.zip
-          fi
+
+      - name: step-build-windows-get-sdl3-image-with-ext-deps
+        run: |
           if [ ! -d SDL3_image-$SDL_IMAGE_VER-win32-x64 ]; then
+            if [ ! -f SDL3_image-$SDL_IMAGE_VER-win32-x64.zip ]; then
+              curl --location --remote-name https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER-win32-x64.zip
+            fi
             mkdir SDL3_image-$SDL_IMAGE_VER-win32-x64
             unzip -d SDL3_image-$SDL_IMAGE_VER-win32-x64 SDL3_image-$SDL_IMAGE_VER-win32-x64.zip
           fi
+
+      - name: step-build-windows-create-archive
+        run: |
           zip -j lightning-image-viewer-$TAG_NAME-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll lightning-image-viewer/README.md
 
-      - name: step-build-emscripten
+      - name: step-build-emscripten-install-system-deps
         run: |
           apt install -y emscripten cmake
+
+      - name: step-build-emscripten-get-and-build-sdl3
+        run: |
           if [ ! -d SDL3-$SDL_VER ]; then
             mkdir SDL3-$SDL_VER
             curl --location https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-$SDL_VER.tar.gz | tar --extract --gzip --directory SDL3-$SDL_VER
-          fi
-          if [ ! -d SDL3_image-$SDL_IMAGE_VER ]; then
-            mkdir SDL3_image-$SDL_IMAGE_VER
-            curl --location https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER.tar.gz | tar --extract --gzip --directory SDL3_image-$SDL_IMAGE_VER
           fi
           mkdir -p SDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten
           cd SDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten
           emcmake cmake ..
           emmake make -j4
           cd ../../..
+
+      - name: step-build-emscripten-get-and-build-sdl3-image
+        run: |
+          if [ ! -d SDL3_image-$SDL_IMAGE_VER ]; then
+            mkdir SDL3_image-$SDL_IMAGE_VER
+            curl --location https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER.tar.gz | tar --extract --gzip --directory SDL3_image-$SDL_IMAGE_VER
+          fi
           mkdir -p SDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten
           cd SDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten
           emcmake cmake .. -DSDL3_DIR=$GITHUB_WORKSPACE/SDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten
           emmake make -j4
           cd ../../..
+
+      - name: step-build-emscripten-build
+        run: |
           mkdir -p pages
           emcc -ISDL3-$SDL_VER/SDL3-$SDL_VER/include -ISDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/include -LSDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten -LSDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten -lSDL3 -lSDL3_image -sEXPORTED_RUNTIME_METHODS="['callMain']" -sASYNCIFY -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH lightning-image-viewer/src/viewer.c -o pages/lightning-image-viewer.js
           cp -a lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg pages
@@ -116,7 +141,7 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            lightning-image-viewer_${{ github.event.inputs.tag_name }}_amd64
+            lightning-image-viewer_${{ github.event.inputs.tag_name }}_amd64.deb
             lightning-image-viewer-${{ github.event.inputs.tag_name }}-win32-x64.zip
 
       - name: step-create-release
