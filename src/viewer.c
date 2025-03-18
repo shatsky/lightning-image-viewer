@@ -683,7 +683,6 @@ int main(int argc, char** argv)
                 exit(0);
         }
     }
-    // TODO fails on Wayland upon long keyboard key press without error
     SDL_Log("SDL_WaitEvent failed: %s", SDL_GetError());
     return 0;
 }
