@@ -21,9 +21,9 @@ Note: on Linux Wayland with XWayland SDL3 currently falls back on X11 backend if
 
 Licensed under GPLv3. Originally published at https://github.com/shatsky/lightning-image-viewer
 
-## Building
+## Building and installing
 
-You can use Nix expression to build&install with Nix (via `nix-env -i -f default.nix`), or use it as a reference to build&install manually (this is currently a single file project, see buildPhase in derivation.nix).
+You can use Nix expression to build&install with Nix (naively via `nix-env -i -f default.nix`), or use it as a reference to build&install manually (this is currently a single file project, see buildPhase in derivation.nix).
 
 Note: Nix expression depends on sdl3 and sdl3-image in nixpkgs; as of writing this, only nixpkgs-unstable has both
 
@@ -32,6 +32,10 @@ See also GitHub releases page for pre-built Windows binaries and Ubuntu packages
 Note: release artifacts are built with build provenance attestation, allowing to verify that they are built via GitHub Actions workflow on GitHub CI/CD from original source. Attestations are available at https://github.com/shatsky/lightning-image-viewer/attestations (direct link to attestation for specific release should be provided in release notes), verification is as simple (if you trust GitHub to verify its signatures for you) as comparing SHA-256 hash of downloaded file with one listed in attestation. This is particulary helpful for Windows users who might encounter Microsoft antivirus detecting "Trojan/Wacatac.B!ml" or similarly named malware in it (which it randomly detects in unknown unsigned binaries, "!ml" suffix suggests it's AI detection)
 
 Note: Ubuntu package is built on/for Ubuntu 25.04; it's 1st Ubuntu release to have SDL3, as of writing this it's not released yet, but daily images are available
+
+## Usage
+
+`lightning-image-viewer [file]` opens file, `lightning-image-viewer` without args displays file selection dialog.
 
 ## Main issues
 
