@@ -1,14 +1,23 @@
 # Lightning Image Viewer
 
-Just another simple minimalistic lightweight image viewer. Why? Because I like image viewing UX available on certain websites where image is displayed in floating overlay container which can be dragged and zoomed like a map; I wanted to have it when looking through my local image collections using desktop file manager with mouse and non-retina display. More detailed UX description:
+Fast and lightweight cross-platform desktop image viewing app featuring minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps, implemented in C with SDL3 and SDL3_image; pan/zoom/fullscreen controls basically replicate controls of leaflet.js which powers most web maps (but zoom and keyboard pan are 2x more granular) and Firefox&Chrome browsers. More detailed description:
+- maximized transparent borderless window (creating illusion that visible image rectangle is the window, but its size and position is changed upon pan and zoom without messing with window controls)
+- zoom with mouse wheel up/down (in/out) or keyboard =/-/0 (in/out/1:1); zoom is discrete with geometric series of scales with multiplier of 2^(1/2) incl. 1:1; mouse zoom preserves image point currently under mouse cursor; keyboard zoom preserves image point currently in the center of the window/screen; upon loading image it is scaled to largest scale in the series in which it fits in window/screen
+- pan with left mouse button pressed or with keyboard Up/Down/Left/Right; keyboard pan delta is 40px and, like in map apps, it's "move the camera, not the object", i. e. image is moved in direction opposite to pressed key; upon loading image it is centered
+- close with left mouse button click (if no pan nor zoom were performed between button press and release events), keyboard Q, Esc or Enter (latter can be counter habitual since some popular viewers use it for fullscreen, but I find it convenient to open and close with same key)
+- toggle fullscreen with middle mouse button click or keyboard F or F11; in fullscreen image is scaled to fit to screen, background is black; pan and zoom in fullscreen also switch to non-fullscreen, proceeding from last non-fullscreen view state (but with rotation and mirroring state changes applied in fullscreen)
+- switch to next/previous file in directory with keyboard PgDn/PgUp (sorted by file modification time descending)
+- rotate clockwise/counter clockwise with keyboard R/L, mirror (horizontally) with M; changes are NOT saved, app has no code for writing to opened files (I hate viewers overwriting my files when I'm not asking for it)
 
-- maximized transparent borderless window
-- zoom with wheel (geometric series of scales with multiplier of 2^(1/2) incl. 1:1)
-- drag with left mouse button pressed
-- close with left mouse button click (if no drag nor zoom were performed between button press and release events)
-- toggle fullscreen with middle mouse button click (in fullscreen image is scaled to fit the screen)
+There are no screenshots (and you can see they make no sense if you try the app), but you can try it right in browser at https://shatsky.github.io/lightning-image-viewer/ (no, app itself has nothing "web", but it can be compiled to WebAssembly and run in browser using Emscripten and its backend in SDL3; natively built app is as "purely native" as it goes with SDL3 native backend providing thin abstraction layer over platform's graphics and input subsystems).
 
-Implemented in C with SDL3 and SDL3_image. Should work on any platform supported by SDL3, tested on Linux (Wayland, X11) and Windows
+I created it because I like image viewing UX available on certain websites where image is displayed in floating overlay container which can be panned and zoomed like a map and closed with a click on it; I find it very convenient for selective switching between images and looking into their details, and wanted to have it when looking through my local image collections using desktop file manager with mouse and keyboard. Existing image viewers which I know of felt slow to open image from file manager and/or uncomfortable to manipulate its display, to the point that to look through some memorable photos which I have on local storage I would rather go to website on which they are published.
+
+Should work on any platform supported by SDL3, tested on Linux (Wayland, X11) and Windows.
+
+Image formats support depends on SDL3_image build; SDL3_image has "built-in" support for BMP, GIF, JPEG, LBM, PCX, PNG, PNM (PPM/PGM/PBM), QOI, TGA, XCF, XPM, and simple SVG format images; it also has support for AVIF, JPEG-XL, TIFF, and WebP via "external" dependencies; Linux distros normally provide SDL3_image built with all of them.
+
+Note: on Linux Wayland with XWayland SDL3 currently falls back on X11 backend if Wayland compositor lacks support for fifo-v1 protocol (important for games performance, still missing in KDE Plasma kwin_wayland as of writing this). This can be overridden via `SDL_VIDEO_DRIVER=wayland` env var
 
 Licensed under GPLv3. Originally published at https://github.com/shatsky/lightning-image-viewer
 
@@ -16,58 +25,37 @@ Licensed under GPLv3. Originally published at https://github.com/shatsky/lightni
 
 You can use Nix expression to build&install with Nix (via `nix-env -i -f default.nix`), or use it as a reference to build&install manually (this is currently a single file project, see buildPhase in derivation.nix).
 
-Note: Nix expression tested against stable nixpkgs 24.11, broken against previous 24.05 (SDL3 is not even in 24.11 yet, so I copied Nix expression for SDL3 from open PR which depends on nixpkgs changes added between these)
+Note: Nix expression depends on sdl3 and sdl3-image in nixpkgs; as of writing this, only nixpkgs-unstable has both
 
-Note: image formats support depends on SDL3_image build, which can have it disabled for some common formats incl. WebP
+See also GitHub releases page for pre-built Windows binaries and Ubuntu packages or, in case you want to build them yourself, build steps in the workflow in .github/workflows/ which is used to build them.
 
-### Building for Windows
+Note: release artifacts are built with build provenance attestation, allowing to verify that they are built via GitHub Actions workflow on GitHub CI/CD from original source. Attestations are available at https://github.com/shatsky/lightning-image-viewer/attestations (direct link to attestation for specific release should be provided in release notes), verification is as simple (if you trust GitHub to verify its signatures for you) as comparing SHA-256 hash of downloaded file with one listed in attestation. This is particulary helpful for Windows users who might encounter Microsoft antivirus detecting "Trojan/Wacatac.B!ml" or similarly named malware in it (which it randomly detects in unknown unsigned binaries, "!ml" suffix suggests it's AI detection)
 
-If you are normal Windows developer using normal Windows toolchain, this section is just for facepalm^W reference.
-
-This is how I currently manually build Windows binary on NixOS:
-- env with x86_64-w64-mingw32-gcc: `nix-shell -p pkgsCross.mingwW64.pkgsBuildHost.gcc`
-- download and extract https://github.com/libsdl-org/SDL/releases/download/preview-3.1.6/SDL3-devel-3.1.6-mingw.tar.gz and https://github.com/libsdl-org/SDL_image/releases/download/preview-3.1.0/SDL3_image-devel-3.1.0-mingw.zip
-- convert icon to .ico: `magick share/icons/hicolor/scalable/apps/lightning-image-viewer.svg lightning-image-viewer.ico`
-- build .o with icon: `x86_64-w64-mingw32-windres src/viewer.rc icon.o`
-- build .exe: `x86_64-w64-mingw32-gcc src/viewer.c icon.o -ISDL3-3.1.6/x86_64-w64-mingw32/include -ISDL3_image-3.1.0/x86_64-w64-mingw32/include -LSDL3-3.1.6/x86_64-w64-mingw32/lib -LSDL3_image-3.1.0/x86_64-w64-mingw32/lib -l:libSDL3.dll.a -l:libSDL3_image.dll.a -mwindows -o lightning-image-viewer.exe`
-- download and extract https://github.com/libsdl-org/SDL_image/releases/download/preview-3.1.0/SDL3_image-devel-3.1.0-VC.zip (because mingw build is built without "optional formats" support incl. WebP)
-- put SDL3-3.1.6/x86_64-w64-mingw32/bin/SDL3.dll , ~~SDL3_image-3.1.0/x86_64-w64-mingw32/bin/SDL3_image.dll~~ SDL3_image-3.1.0/lib/x64/SDL3_image.dll and SDL3_image-3.1.0/lib/x64/optional/*.dll in same dir with .exe
-
-Note: I guess mixing DLLs built with mingw and VC in single process is not safe in general, but for SDL3 which is written in C and has stable ABI it should be fine and seems to work without issues, correct me if I'm wrong
-
-Note: it might be possible to have unified Nix expr for cross building without using pre-built SDL, but ~~`pkgsCross.mingwW64.SDL2_image` currently fails to build (seems that most pkgs are broken for mingwW64, though SDL2 itself builds successfully)~~ might return to this after stable SDL3 version is released and added to nixpkgs
-
-Note: nixpkgs has concept of 3 platforms:
-- "buildPlatform" (on which program is to be built, i. e. on which Nix runs)
-- "hostPlatform" (on which built program is to be executed)
-- "targetPlatform" (for which built program emits code, only relevant for compilers)
-
-On x86_64 NixOS:
-- for any pkg, buildPlatform is "x86_64-linux" (overriding it doesn't make sense)
-- for "usual" pkgs (which are to be executed on same platform), hostPlatform is also "x86_64-linux"
-- for pkgs in `pkgsCross.mingwW64` set, hostPlatform is "x86_64-w64-mingw32"
-- for pkgs in `pkgsCross.mingwW64.pkgsBuildHost` set, hostPlatform is "x86_64-linux", targetPlatform is "x86_64-w64-mingw32" (`pkgs<host><target>` pkgs sets have overridden "host" and "target" platforms, in case of `pkgsBuildHost` hostPlatform -> buildPlatform, targetPlatform -> hostPlatform)
-
-Note: "x86_64-w64-mingw32" and "x86_64-linux" are "target triplets" describing target for which compiler produces binary, see https://wiki.osdev.org/Target_Triplet
+Note: Ubuntu package is built on/for Ubuntu 25.04; it's 1st Ubuntu release to have SDL3, as of writing this it's not released yet, but daily images are available
 
 ## Main issues
 
 - (may be not true anymore, need to test after move to SDL3_image) ~1% of images (which are viewable in common browsers) fail to load (SDL2_image IMG_Load fails, probably lacks internal error handling for malformed images)
 - EXIF rotation info is not taken into account
+- no HEIC support
+- no animated images support (only 1st frame is displayed)
 
 ## Roadmap
 
-- keyboard controls (consistent with Firefox and map apps)
-- switching to next/previous image in directory
-- rotation and mirroring
+- fix above listed issues
+- sane limits for pan and zoom
+- asynchronous loading
 - copying to clipboard
-- interpolation in non-1:1 scales, maybe magic kernel sharp (currently nearest, yes I know a pixel is not a little square)
+- better interpolation in non-1:1 scales, maybe magic kernel sharp (currently linear in <1:1 and nearest in >=1:1, yes I know a pixel is not a little square)
 - background/single instance mode for opening with minimal delay (using D-Bus activation on Linux)
-- some kind of border (shadow? glassy?), visual hints about current image, scale, controls
+- some kind of border (shadow? glassy?), UI menus and dialogs, visual hints about current image (currently displayed in window title which should be visible in taskbar), current scale, controls
+- (maybe) video playback (ffmpeg? libvlc?)
+- (maybe) touch input support (SDL3 support for it seems not mature yet, most desktop environments translate it into mouse events for compatibility anyway), smooth transitions, continious zoom
+- (maybe) some reasonable configurability
 
 ## Credits
 
 Special thanks to:
-- JYKITORS, for constantly supplying me with free (as in beer, not as in speech) delicious sushi
+- JYKITORS, for constantly supplying me with free (as in beer, not as in speech) delicious sushi (not as in Sushi file previewer for GNOME/Nautilus)
 - ChatGPT (in case it does have consciousness after all), for its time-saving advice, and all humans who created knowledge which it was trained on
 - all conscious humans who don't copypaste valuable lossy-compressed images as pixmaps (which causes loss of compression and addition of new compression artifacts upon repeated lossy compression) but share them as files
