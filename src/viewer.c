@@ -359,13 +359,6 @@ void view_move_by_vector(float x, float y) {
     render_window();
 }
 
-// TODO scandir() is "C POSIX library" (superset of "C standard library") and not available in Microsoft C library used by mingw nor in POSIX subset provided by mingw. Options:
-// - build for Windows with something like Cygwin for full POSIX compat
-// - implement separate fill_filelist() for Windows using FindFirstFile()/FindNextFile()/FindClose() (Win32 API)
-// - implement using opendir(), readdir() POSIX functions available in POSIX subset provided by mingw
-// for now, fill_filelist() for Windows is a stub
-#ifndef _WIN32
-
 // helper functions for scandir() which is called in fill_filelist() to get list of image files sorted by mtime
 // TODO get rid of duplicate stat() calls?
 
@@ -392,6 +385,66 @@ int scandir_compar_mtime(const struct dirent** dir_entry1, const struct dirent**
     }
     return dir_entry2_stat_buf.st_mtime - dir_entry1_stat_buf.st_mtime;
 }
+
+#ifdef _WIN32
+
+// mingw does not provide scandir(); it belongs to "C POSIX library" (superset of "C standard library") and is not available in Microsoft C library used by mingw nor in POSIX subset provided by mingw
+// struct dirent ***namelist is dirent
+// struct dirent* **namelist is ptr to dirent; it's ptr to single dirent, mem is allocated individually for each struct dirent* ptr, (**namelist)+1 is not addr of next dirent, *(**(namelist)+1) is not next dirent
+// struct dirent** *namelist is ptr to (1st item of) arr of ptrs to dirents; (*namelist)+1 is addr of next ptr to dirent, *((*namelist)+1) or (*namelist)[1] is addr of next dirent, *(*((*namelist)+1)) or *((*namelist)[1]) is next dirent
+// struct dirent*** namelist is ptr to ptr to 1st item of arr of ptrs to dirents
+// last level of indirection is needed for callee to be able to pass addr of its struct dirent** ptr as arg and get result written to it
+// middle level "arr of ptrs to dirents" is needed instead of just "arr of dirents" because dirent is tricky
+// it's a struct, but its last member d_name, which is defined as regular fixed size char arr with some impl-specific size, is allowed to "overflow", "holding" \0-terminated str which is longer than size of d_name arr in struct dirent; of course in such case allocated mem pointed by struct dirent* ptr is larger than size of struct dirent, enough to accomodate it with this "d_name overflow"; this makes "arr of dirents" impossible
+int scandir(const char* dir, struct dirent*** namelist,
+            int (* sel)(const struct dirent*),
+            int (* compar)(const struct dirent**, const struct dirent**)) {
+    DIR* dir_stream;
+    struct dirent* dir_entry;
+    if ((dir_stream = opendir(dir)) == NULL) { // free closedir(dir_stream): before returns
+        return -1;
+    }
+    int namelist_capacity = 0;
+    int namelist_len = 0;
+    struct dirent** namelist_realloc;
+    *namelist = NULL;
+    while ((dir_entry = readdir(dir_stream)) != NULL) { // free(dir_entry): via closedir(dir_stream)
+        if (!sel(dir_entry)) {
+            continue;
+        }
+        // if namelist is full, double its capacity
+        if (namelist_len == namelist_capacity) {
+            namelist_capacity = namelist_capacity ? namelist_capacity*2 : 1;
+            if ((namelist_realloc = realloc(*namelist, namelist_capacity*sizeof(struct dirent*))) == NULL) { // free(namelist_realloc): before err returns via free(*namelist) or by callee via free(state.filelist)
+                while (namelist_len--) {
+                    free((*namelist)[namelist_len]);
+                }
+                free(*namelist);
+                closedir(dir_stream);
+                return -1;
+            }
+            *namelist = namelist_realloc;
+        }
+        // portable impl has to check len of "d_name overflow" and allocate mem accordingly
+        // TODO guaranteed that dirent has no pointers to outer things which will be invalidated after subsequent readdir() or closedir()?
+        size_t dir_entry_size = strlen(dir_entry->d_name)+1>sizeof(dir_entry->d_name) ? sizeof(struct dirent)-sizeof(dir_entry->d_name)+strlen(dir_entry->d_name)+1 : sizeof(struct dirent);
+        if (((*namelist)[namelist_len] = malloc(dir_entry_size)) == NULL) { // free((*namelist)[namelist_len]): before err returns or by callee via free(state.filelist[state.filelist_len])
+            while (namelist_len--) {
+                free((*namelist)[namelist_len]);
+            }
+            free(*namelist);
+            closedir(dir_stream);
+            return -1;
+        }
+        memcpy((*namelist)[namelist_len], dir_entry, dir_entry_size);
+        namelist_len++;
+    }
+    closedir(dir_stream);
+    qsort(*namelist, namelist_len, sizeof(struct dirent*), (int (*)(const void*, const void*))compar);
+    return namelist_len;
+}
+
+#endif
 
 // fills filelist with filepaths of image files in parent dir of file state.file_load_path, enabling prev/next switch logic
 // before calling this, state.filelist must be NULL and state.file_load_path must point to allocated mem which can be freed via it
@@ -441,12 +494,6 @@ void fill_filelist() {
         }
     }
 }
-
-#else
-
-void fill_filelist() {}
-
-#endif
 
 void load_next_image(bool reverse) {
     // filelist is not filled until load_next_image() is called 1st time, to display initial image quicker
