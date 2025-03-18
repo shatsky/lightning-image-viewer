@@ -2,7 +2,7 @@ Package: lightning-image-viewer
 Version:
 Section: graphics
 Architecture: amd64
-Depends: libsdl3, libsdl3-image
+Depends: libsdl3-0, libsdl3-image0
 Maintainer: Eugene Shatsky <eugene@shatsky.net>
 Description: Fast and lightweight desktop image viewer featuring minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps
 Homepage: https://github.com/shatsky/lightning-image-viewer
