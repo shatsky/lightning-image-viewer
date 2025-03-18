@@ -70,6 +70,10 @@ jobs:
           sed "s/^Version:.*/Version: $TAG_NAME/" lightning-image-viewer/src/control.in > lightning-image-viewer_${TAG_NAME}_amd64/DEBIAN/control
           dpkg --build lightning-image-viewer_${TAG_NAME}_amd64
 
+      - name: step-test-ubuntu
+        run: |
+          apt install ./lightning-image-viewer_${TAG_NAME}_amd64.deb
+
       - name: step-build-windows-install-system-deps
         run: |
           apt install -y gcc-mingw-w64 imagemagick zip unzip curl
