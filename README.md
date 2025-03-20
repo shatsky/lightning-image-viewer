@@ -13,7 +13,7 @@ There are no screenshots (and you can see they make no sense if you try the app)
 
 I created it because I like image viewing UX available on certain websites where image is displayed in floating overlay container which can be panned and zoomed like a map and closed with a click on it; I find it very convenient for selective switching between images and looking into their details, and wanted to have it when looking through my local image collections using desktop file manager with mouse and keyboard. Existing image viewers which I know of felt slow to open image from file manager and/or uncomfortable to manipulate its display, to the point that to look through some memorable photos which I have on local storage I would rather go to website on which they are published.
 
-Should work on any platform supported by SDL3, tested on Linux (Wayland, X11) and Windows.
+Currently target platforms are Linux (Wayland, X11) and Windows, but it should be possible to make it work on any POSIX-compatible platform supported by SDL3 with minimal effort.
 
 Image formats support depends on SDL3_image build; SDL3_image has "built-in" support for BMP, GIF, JPEG, LBM, PCX, PNG, PNM (PPM/PGM/PBM), QOI, TGA, XCF, XPM, and simple SVG format images; it also has support for AVIF, JPEG-XL, TIFF, and WebP via "external" dependencies; Linux distros normally provide SDL3_image built with all of them.
 
@@ -31,7 +31,9 @@ See also GitHub releases page for pre-built Windows binaries and Ubuntu packages
 
 Note: release artifacts are built with build provenance attestation, allowing to verify that they are built via GitHub Actions workflow on GitHub CI/CD from original source. Attestations are available at https://github.com/shatsky/lightning-image-viewer/attestations (direct link to attestation for specific release should be provided in release notes), verification is as simple (if you trust GitHub to verify its signatures for you) as comparing SHA-256 hash of downloaded file with one listed in attestation. This is particulary helpful for Windows users who might encounter Microsoft antivirus detecting "Trojan/Wacatac.B!ml" or similarly named malware in it (which it randomly detects in unknown unsigned binaries, "!ml" suffix suggests it's AI detection)
 
-Note: Ubuntu package is built on/for Ubuntu 25.04; it's 1st Ubuntu release to have SDL3, as of writing this it's not released yet, but daily images are available
+Note: Windows binary should work properly on Windows 10 version 1903 (May 2019 update, in which support for setting process code page to UTF-8 via app manifest was added) and later
+
+Note: Ubuntu package is built on/for Ubuntu 25.04 (1st Ubuntu release with SDL3, as of writing this it's not released yet, but daily images are available)
 
 ## Usage
 
@@ -43,6 +45,7 @@ Note: Ubuntu package is built on/for Ubuntu 25.04; it's 1st Ubuntu release to ha
 - EXIF rotation info is not taken into account
 - no HEIC support
 - no animated images support (only 1st frame is displayed)
+- GNOME and possibly other graphical environments which have shell UI in top left display corner place invisible window at top left corner of "usable area", causing shift of visible image rectangle from intended position which is calculated with assumption that window is placed at top left display corner
 
 ## Roadmap
 
