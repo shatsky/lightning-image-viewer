@@ -277,10 +277,12 @@ void load_image() {
 void set_win_fullscreen(bool win_fullscreen) {
     state.win_fullscreen = win_fullscreen;
     // TODO clear window?
-    // TODO on Plasma Wayland, shell UI isn't hidden/shown after this; happens upon render_window() call after another event
     if (!SDL_SetWindowFullscreen(state.window, win_fullscreen)) {
         SDL_Log("SDL_SetWindowFullscreen failed: %s", SDL_GetError());
         exit(1);
+    }
+    if (!SDL_SyncWindow(state.window)) {
+        SDL_Log("SDL_SyncWindow timed out");
     }
     // assuming that window size can change because of shell UI
     if (!SDL_GetWindowSize(state.window, &state.win_w, &state.win_h)) {
