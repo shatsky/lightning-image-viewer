@@ -27,6 +27,12 @@
 #include <SDL3/SDL_mutex.h>
 #include <SDL3_image/SDL_image.h>
 
+#ifdef WITH_LIBEXIF
+
+#include <libexif/exif-data.h>
+
+#endif
+
 #define APP_NAME "Lightning Image Viewer"
 #define WIN_TITLE_TAIL " - " APP_NAME
 
@@ -57,8 +63,8 @@
 // TODO add macro to "call function, check return val, log err and exit in case of failure" for bool SDL functions which return false in case of failure and set err
 
 struct State {
-    // cur x, y: coords of current point (under cursor)
-    // pre mv: at start of move (drag) action
+    // cur_x, _y: coords of current point (under cursor)
+    // pre_mv: at start of move (drag) action
     char* file_load_path;
     bool file_load_success;
     SDL_Semaphore* file_dialog_semaphore;
@@ -82,7 +88,11 @@ struct State {
     float view_zoom_scale;
     float view_rect_pre_mv_x;
     float view_rect_pre_mv_y;
-    int view_rotate_angle_q; // 1/4-turns
+    // init: initial after loading image/resetting view
+    // rotate_angle_q: 1/4-turns
+    int view_init_rotate_angle_q;
+    bool view_init_mirror;
+    int view_rotate_angle_q;
     bool view_mirror;
     struct dirent** filelist;
     int filelist_len;
@@ -156,6 +166,69 @@ static void SDLCALL file_dialog_callback(void* userdata, const char * const *fil
     }
 }
 
+// set initial orientation, called upon loading image
+// SDL3_image doesn't use JPEG EXIF orientation metadata, nor does it provide access to it
+// TODO turn this into metadata loader capable of displaying thumbnail ahead of full image loading
+void set_init_orient() {
+    state.view_init_rotate_angle_q = 0;
+    state.view_init_mirror = false;
+
+#ifdef WITH_LIBEXIF
+
+    // TODO avoid re-reading file, or at least doing this for formats for which it is not relevant
+    // TODO libexif seems to be able to load only from JPEG (of relevant formats), see ExifLoaderDataFormat. Is  it relevant for any other relevant format? TIFF has support for embedding EXIF metadata defined in EXIF spec itself, PNG and most "post-JPEG" lossy formats have it in their specs, but browsers and viewers support for using it for orientation for non-JPEG formats seems very inconsistent, also most "post-JPEG" lossy formats have their own header fields for orientation, and "external" deps of SDL3_image might handle it internally
+    // note: there's huge mess about meaning of words JPEG (which can mean JPEG compression method itself or be synonym for JFIF and EXIF file format), JFIF (original file format for storing JPEG compressed image) and EXIF (metadata format or another file format for storing JPEG, which is described in EXIF spec in such strange way that it's unclear if it's separate file format or incorrect description of embedding EXIF metadata in JFIF)
+    //ExifData *exif_data = exif_data_new_from_data(data, data_len);
+    ExifData *exif_data = exif_data_new_from_file(state.file_load_path); // free(exif_data): after exit_orientation is checked
+    if (exif_data != NULL)
+    {
+        ExifEntry *exif_entry = exif_data_get_entry(exif_data, EXIF_TAG_ORIENTATION); // free(exif_entry): never, this does not allocate, returns ptr to offset in exif_data
+        if (exif_entry != NULL) {
+            ExifByteOrder exif_byte_order = exif_data_get_byte_order(exif_data);
+            int exif_orientation = exif_get_short(exif_entry->data, exif_byte_order);
+            switch(exif_orientation) {
+                // TODO expression? Declare array and select from it by index?
+                //case 1:
+                //    state.view_init_rotate_angle_q = 0;
+                //    state.view_init_mirror = false;
+                //    break;
+                case 2:
+                    //state.view_init_rotate_angle_q = 0;
+                    state.view_init_mirror = true;
+                    break;
+                case 3:
+                    state.view_init_rotate_angle_q = 2;
+                    //state.view_init_mirror = false;
+                    break;
+                case 4:
+                    state.view_init_rotate_angle_q = 2;
+                    state.view_init_mirror = true;
+                    break;
+                case 5:
+                    state.view_init_rotate_angle_q = 1;
+                    state.view_init_mirror = true;
+                    break;
+                case 6:
+                    state.view_init_rotate_angle_q = 1;
+                    //state.view_init_mirror = false;
+                    break;
+                case 7:
+                    state.view_init_rotate_angle_q = 3;
+                    state.view_init_mirror = true;
+                    break;
+                case 8:
+                    state.view_init_rotate_angle_q = 3;
+                    //state.view_init_mirror = false;
+                    break;
+            }
+        }
+        exif_data_free(exif_data);
+    }
+
+#endif
+
+}
+
 // non-redrawing, only update scale and view_rect size
 void set_zoom_level(int view_zoom_level) {
     state.view_zoom_level = view_zoom_level;
@@ -218,13 +291,15 @@ void render_window() {
 
 // reset view_rect to initial scale and position
 void view_reset() {
-    state.view_rotate_angle_q = 0;
-    state.view_mirror = false;
+    state.view_rotate_angle_q = state.view_init_rotate_angle_q;
+    state.view_mirror = state.view_init_mirror;
     // set max zoom level at which entire image fits in window
+    int win_w = state.view_rotate_angle_q%2 ? state.win_h : state.win_w;
+    int win_h = state.view_rotate_angle_q%2 ? state.win_w : state.win_h;
     // zoom_level = 2*log2(scale)
-    set_zoom_level(floor(2 * log2((float)state.win_h / state.img_h)));
-    if (state.view_rect.w > state.win_w) {
-        set_zoom_level(floor(2 * log2((float)state.win_w / state.img_w)));
+    set_zoom_level(floor(2 * log2((float)win_h / state.img_h)));
+    if (state.view_rect.w > win_w) {
+        set_zoom_level(floor(2 * log2((float)win_w / state.img_w)));
     }
     // centered
     state.view_rect.x = (state.win_w - state.view_rect.w) / 2;
@@ -270,6 +345,7 @@ void load_image() {
         exit(1);
     }
     free(win_title);
+    set_init_orient();
     view_reset();
 }
 
