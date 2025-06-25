@@ -25,7 +25,7 @@ Licensed under GPLv3. Originally published at https://github.com/shatsky/lightni
 
 You can use Nix expression to build&install with Nix (naively via `nix-env -i -f default.nix`), or use it as a reference to build&install manually (this is currently a single file project, see buildPhase in derivation.nix).
 
-Note: Nix expression depends on sdl3 and sdl3-image in nixpkgs; as of writing this, only nixpkgs-unstable has both
+Note: Nix expression depends on sdl3 and sdl3-image in nixpkgs (both added in 24.11)
 
 See also GitHub releases page for pre-built Windows binaries and Ubuntu packages or, in case you want to build them yourself, build steps in the workflow in .github/workflows/ which is used to build them.
 
@@ -33,7 +33,7 @@ Note: release artifacts are built with build provenance attestation, allowing to
 
 Note: Windows binary should work properly on Windows 10 version 1903 (May 2019 update, in which support for setting process code page to UTF-8 via app manifest was added) and later
 
-Note: Ubuntu package is built on/for Ubuntu 25.04 (1st Ubuntu release with SDL3, as of writing this it's not released yet, but daily images are available)
+Note: Ubuntu package is built on/for Ubuntu 25.04 (1st Ubuntu release with SDL3)
 
 ## Usage
 
@@ -42,7 +42,6 @@ Note: Ubuntu package is built on/for Ubuntu 25.04 (1st Ubuntu release with SDL3,
 ## Main issues
 
 - (may be not true anymore, need to test after move to SDL3_image) ~1% of images (which are viewable in common browsers) fail to load (SDL2_image IMG_Load fails, probably lacks internal error handling for malformed images)
-- EXIF rotation info is not taken into account
 - no HEIC support
 - no animated images support (only 1st frame is displayed)
 - GNOME and possibly other graphical environments which have shell UI in top left display corner place invisible window at top left corner of "usable area", causing shift of visible image rectangle from intended position which is calculated with assumption that window is placed at top left display corner
@@ -59,6 +58,7 @@ Note: Ubuntu package is built on/for Ubuntu 25.04 (1st Ubuntu release with SDL3,
 - (maybe) video playback (ffmpeg? libvlc?)
 - (maybe) touch input support (SDL3 support for it seems not mature yet, most desktop environments translate it into mouse events for compatibility anyway), smooth transitions, continious zoom
 - (maybe) some reasonable configurability
+- improve EXIF rotation/mirroring tag handling (currently only for JPEG and with re-reading of every loaded file)
 
 ## Credits
 
