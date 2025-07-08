@@ -79,7 +79,7 @@ jobs:
 
       - name: step-build-windows-install-system-deps
         run: |
-          apt install -y curl make imagemagick gcc-mingw-w64 g++-mingw-w64 zip unzip
+          apt install -y curl make gcc-mingw-w64 cmake g++-mingw-w64 imagemagick unzip zip
 
       - name: step-build-windows-get-sdl3
         run: |
