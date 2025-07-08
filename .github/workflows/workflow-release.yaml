@@ -39,6 +39,8 @@ jobs:
       SDL_VER: 3.2.8
       SDL_IMAGE_VER: 3.2.4
       LIBEXIF_VER: 0.6.25
+      LIBDE265_VER: 1.0.16
+      LIBHEIF_VER: 1.20.1
       DEBIAN_FRONTEND: noninteractive
       TAG_NAME_V: ${{ github.event.inputs.tag_name_v }}
 
@@ -63,9 +65,9 @@ jobs:
 
       - name: step-build-ubuntu
         run: |
-          apt install -y gcc libsdl3-dev libsdl3-image-dev libexif-dev
+          apt install -y gcc libsdl3-dev libsdl3-image-dev libexif-dev libheif-dev
           mkdir -p lightning-image-viewer_${TAG_NAME_V}_amd64/usr/bin lightning-image-viewer_${TAG_NAME_V}_amd64/usr/share/doc/lightning-image-viewer lightning-image-viewer_${TAG_NAME_V}_amd64/DEBIAN
-          gcc -DWITH_LIBEXIF lightning-image-viewer/src/viewer.c -lSDL3 -lSDL3_image -lexif -lm -o lightning-image-viewer_${TAG_NAME_V}_amd64/usr/bin/lightning-image-viewer
+          gcc -DWITH_LIBEXIF -DWITH_LIBHEIF lightning-image-viewer/src/viewer.c -lSDL3 -lSDL3_image -lexif -lheif -lm -o lightning-image-viewer_${TAG_NAME_V}_amd64/usr/bin/lightning-image-viewer
           cp -a lightning-image-viewer/share lightning-image-viewer_${TAG_NAME_V}_amd64/usr
           cp -a README.md lightning-image-viewer_${TAG_NAME_V}_amd64/usr/share/doc/lightning-image-viewer
           sed "s/^Version:.*/Version: $TAG_NAME_V/" lightning-image-viewer/src/control.in > lightning-image-viewer_${TAG_NAME_V}_amd64/DEBIAN/control
@@ -77,7 +79,7 @@ jobs:
 
       - name: step-build-windows-install-system-deps
         run: |
-          apt install -y curl make imagemagick gcc-mingw-w64 zip unzip
+          apt install -y curl make imagemagick gcc-mingw-w64 g++-mingw-w64 zip unzip
 
       - name: step-build-windows-get-sdl3
         run: |
@@ -104,11 +106,54 @@ jobs:
           make
           cd ../..
 
+      - name: step-build_windows-get-libheif
+        run: |
+          # https://www.mingw-w64.org/build-systems/cmake/
+          cat <<EOF > toolchain-mingw64.cmake
+          # toolchain-mingw64.cmake
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_SYSTEM_PROCESSOR x86_64)
+
+          # specify the cross compiler
+          set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+          set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+          set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
+
+          # where is the target environment
+          set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
+
+          # search for programs in the build host directories
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          # for libraries and headers in the target directories
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          EOF
+          if [ ! -d libde265-$LIBDE265_VER ]; then
+            mkdir libde265-$LIBDE265_VER
+            curl --location https://github.com/strukturag/libde265/releases/download/v$LIBDE265_VER/libde265-$LIBDE265_VER.tar.gz | tar --extract --gzip --directory libde265-$LIBDE265_VER
+          fi
+          cd libde265-$LIBDE265_VER/libde265-$LIBDE265_VER
+          mkdir -p build
+          cd build
+          cmake -DCMAKE_TOOLCHAIN_FILE=../../../toolchain-mingw64.cmake ..
+          make
+          cd ../../..
+          if [ ! -d libheif-$LIBHEIF_VER ]; then
+            mkdir libheif-$LIBHEIF_VER
+            curl --location https://github.com/strukturag/libheif/releases/download/v$LIBHEIF_VER/libheif-$LIBHEIF_VER.tar.gz | tar --extract --gzip --directory libheif-$LIBHEIF_VER
+          fi
+          cd libheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER
+          mkdir -p build
+          cd build
+          cmake -DCMAKE_TOOLCHAIN_FILE=../../../toolchain-mingw64.cmake -DLIBDE265_INCLUDE_DIR=../../../libde265-$LIBDE265_VER/libde265-$LIBDE265_VER -DLIBDE265_LIBRARY=../../../libde265-$LIBDE265_VER/libde265-$LIBDE265_VER/build/libde265/libde265.dll.a -DWITH_X265=OFF --preset=release ..
+          make
+          cd ../../..
+
       - name: step-build-windows-build
         run: |
           magick lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg lightning-image-viewer.ico
           x86_64-w64-mingw32-windres lightning-image-viewer/src/viewer.rc icon.o
-          x86_64-w64-mingw32-gcc -DWITH_LIBEXIF lightning-image-viewer/src/viewer.c icon.o -ISDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/include -ISDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/include -Ilibexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER -LSDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/lib -LSDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/lib -Llibexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER/libexif/.libs -l:libSDL3.dll.a -l:libSDL3_image.dll.a -l:libexif.dll.a -mwindows -o lightning-image-viewer.exe
+          x86_64-w64-mingw32-gcc -DWITH_LIBEXIF -DWITH_LIBHEIF lightning-image-viewer/src/viewer.c icon.o -ISDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/include -ISDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/include -Ilibexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER -LSDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/lib -Ilibheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/libheif/api -Ilibheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/build -LSDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/lib -Llibexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER/libexif/.libs -Llibheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/build/libheif -l:libSDL3.dll.a -l:libSDL3_image.dll.a -l:libexif.dll.a -l:libheif.dll.a -mwindows -o lightning-image-viewer.exe
 
       - name: step-build-windows-get-sdl3-image-with-ext-deps
         run: |
@@ -122,7 +167,7 @@ jobs:
 
       - name: step-build-windows-create-archive
         run: |
-          zip -j lightning-image-viewer-$TAG_NAME_V-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll libexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER/libexif/.libs/*.dll README.md
+          zip -j lightning-image-viewer-$TAG_NAME_V-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll libexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER/libexif/.libs/*.dll libde265-$LIBDE265_VER/libde265-$LIBDE265_VER/build/libde265/*.dll libheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/build/libheif/*.dll README.md
 
       - name: step-build-emscripten-install-system-deps
         run: |

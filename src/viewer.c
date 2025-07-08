@@ -32,6 +32,11 @@
 #include <libexif/exif-data.h>
 
 #endif
+#ifdef WITH_LIBHEIF
+
+#include <libheif/heif.h>
+
+#endif
 
 #define APP_NAME "Lightning Image Viewer"
 #define WIN_TITLE_TAIL " - " APP_NAME
@@ -165,6 +170,84 @@ static void SDLCALL file_dialog_callback(void* userdata, const char * const *fil
         exit(1);
     }
 }
+
+#ifdef WITH_LIBHEIF
+
+// SDL_image does not support HEIC, so if its IMG_LoadTexture() fails, we also try this
+SDL_Texture* load_image_texture_libheif() {
+    struct heif_context* ctx = heif_context_alloc();
+    if (ctx == NULL) {
+        SDL_Log("heif_context_alloc failed");
+        return NULL;
+    }
+
+    struct heif_error err;
+    err = heif_context_read_from_file(ctx, state.file_load_path, NULL);
+    if (err.code != heif_error_Ok) {
+        //SDL_Log("heif_context_read_from_file failed: %s", err.message);
+        heif_context_free(ctx);
+        return NULL;
+    }
+
+    struct heif_image_handle *handle = NULL;
+    err = heif_context_get_primary_image_handle(ctx, &handle);
+    if (err.code!=heif_error_Ok || handle==NULL) {
+        //SDL_Log("heif_context_get_primary_image_handle failed: %s", err.message);
+        if (handle != NULL) {
+            heif_image_handle_release(handle);
+        }
+        heif_context_free(ctx);
+        return NULL;
+    }
+
+    struct heif_image *img = NULL;
+    err = heif_decode_image(handle, &img, heif_colorspace_RGB, heif_chroma_interleaved_RGBA, NULL);
+    heif_image_handle_release(handle);
+    if (err.code!=heif_error_Ok || img==NULL) {
+        //SDL_Log("heif_decode_image failed: %s", err.message);
+        if (img != NULL) {
+            heif_image_release(img);
+        }
+        heif_context_free(ctx);
+        return NULL;
+    }
+
+    int width = heif_image_get_width(img, heif_channel_interleaved);
+    int height = heif_image_get_height(img, heif_channel_interleaved);
+    int stride;
+    const uint8_t *pixels = heif_image_get_plane_readonly(img, heif_channel_interleaved, &stride);
+    if (pixels == NULL) {
+        //SDL_Log("heif_image_get_plane_readonly failed");
+        heif_image_release(img);
+        heif_context_free(ctx);
+        return NULL;
+    }
+
+    SDL_Surface *surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_ABGR8888);
+    if (surface == NULL) {
+        SDL_Log("SDL_CreateSurface failed: %s", SDL_GetError());
+        heif_image_release(img);
+        heif_context_free(ctx);
+        return NULL;
+    }
+
+    for (int y=0; y<height; y++) {
+        memcpy(surface->pixels+y*surface->pitch, pixels+y*stride, width*4);
+    }
+    heif_image_release(img);
+    heif_context_free(ctx);
+
+    SDL_Texture *texture = SDL_CreateTextureFromSurface(state.renderer, surface);
+    if (texture == NULL) {
+        SDL_Log("SDL_CreateTextureFromSurface failed: %s", SDL_GetError());
+    }
+
+    SDL_DestroySurface(surface);
+
+    return texture;
+}
+
+#endif
 
 // set initial orientation, called upon loading image
 // SDL3_image doesn't use JPEG EXIF orientation metadata, nor does it provide access to it
@@ -311,12 +394,22 @@ void load_image() {
     // SDL has SDL_Surface which is pixmap in process mem used for software manipulation and rendering and SDL_Texture which describes entity owned by graphics hardware driver used for hardware accelerated rendering
     // IMG_LoadTexture() shortcut fuction internally decodes image into SDL_Surface and calls SDL_CreateTextureFromSurface(); we can use it as long as we don't need to manipulate intermediate SDL_Surface
     if (state.image_texture != NULL) {
+        // assuming it can only be non-NULL after successfull SDL_CreateTexture*() call
         SDL_DestroyTexture(state.image_texture);
     }
     state.image_texture = IMG_LoadTexture(state.renderer, state.file_load_path);
+
+#ifdef WITH_LIBHEIF
+
     if (state.image_texture == NULL) {
         // do not pollute logs; currently load_image() can be called unsuccessfully for many irrelevant files when handling prev/next
         //SDL_Log("IMG_LoadTexture failed");
+        state.image_texture = load_image_texture_libheif();
+    }
+
+#endif
+
+    if (state.image_texture == NULL) {
         state.file_load_success = false;
         return;
     }
@@ -581,7 +674,7 @@ void load_next_image(bool reverse) {
             SDL_Log("failed to fill filelist");
             load_image();
             if (!state.file_load_success) {
-                SDL_Log("IMG_LoadTexture failed; failed to reload file");
+                SDL_Log("load_image failed; failed to reload file");
                 view_reset();
             }
             return;
@@ -595,7 +688,7 @@ void load_next_image(bool reverse) {
         load_image();
     } while (!state.file_load_success && state.filelist_load_i!=filelist_load_i_saved);
     if (!state.file_load_success) {
-        SDL_Log("IMG_LoadTexture failed; wrapped around filelist and failed to load any file");
+        SDL_Log("load_image failed; wrapped around filelist and failed to load any file");
         view_reset();
     }
 }
@@ -635,7 +728,7 @@ int main(int argc, char** argv)
     }
     load_image();
     if (!state.file_load_success) {
-        SDL_Log("IMG_LoadTexture failed; failed to load initial file");
+        SDL_Log("load_image failed; failed to load initial file");
         exit(1);
     }
     // event loop

@@ -1,6 +1,6 @@
 PREFIX = /usr/local
-CFLAGS = -DWITH_LIBEXIF
-LDFLAGS = -lm -lSDL3 -lSDL3_image -lexif
+CFLAGS = -DWITH_LIBEXIF -DWITH_LIBHEIF
+LDFLAGS = -lm -lSDL3 -lSDL3_image -lexif -lheif
 CC = cc
 
 all:
