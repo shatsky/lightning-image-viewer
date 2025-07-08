@@ -667,6 +667,9 @@ void fill_filelist() {
 }
 
 void load_next_image(bool reverse) {
+    // TODO more generic solution for prevention of events accumulation?
+    SDL_SetEventEnabled(SDL_EVENT_KEY_DOWN, false);
+
     // filelist is not filled until load_next_image() is called 1st time, to display initial image quicker
     if (state.filelist == NULL) {
         fill_filelist();
@@ -677,6 +680,7 @@ void load_next_image(bool reverse) {
                 SDL_Log("load_image failed; failed to reload file");
                 view_reset();
             }
+            SDL_SetEventEnabled(SDL_EVENT_KEY_DOWN, true);
             return;
         }
     }
@@ -691,6 +695,8 @@ void load_next_image(bool reverse) {
         SDL_Log("load_image failed; wrapped around filelist and failed to load any file");
         view_reset();
     }
+
+    SDL_SetEventEnabled(SDL_EVENT_KEY_DOWN, true);
 }
 
 // TODO consider moving to SDL3 callbacks
