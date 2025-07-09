@@ -145,7 +145,7 @@ jobs:
           cd libheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER
           mkdir -p build
           cd build
-          cmake -DCMAKE_TOOLCHAIN_FILE=../../../toolchain-mingw64.cmake -DLIBDE265_INCLUDE_DIR=../../../libde265-$LIBDE265_VER/libde265-$LIBDE265_VER -DLIBDE265_LIBRARY=../../../libde265-$LIBDE265_VER/libde265-$LIBDE265_VER/build/libde265/libde265.dll.a -DWITH_X265=OFF --preset=release ..
+          cmake -DCMAKE_TOOLCHAIN_FILE=../../../toolchain-mingw64.cmake -DLIBDE265_INCLUDE_DIR=../../../libde265-$LIBDE265_VER/libde265-$LIBDE265_VER -DLIBDE265_LIBRARY=../../../libde265-$LIBDE265_VER/libde265-$LIBDE265_VER/build/libde265/libde265.dll.a -DWITH_X265=OFF -DENABLE_PLUGIN_LOADING=NO --preset=release ..
           make
           cd ../../..
 
@@ -167,7 +167,7 @@ jobs:
 
       - name: step-build-windows-create-archive
         run: |
-          zip -j lightning-image-viewer-$TAG_NAME_V-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll libexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER/libexif/.libs/*.dll libde265-$LIBDE265_VER/libde265-$LIBDE265_VER/build/libde265/*.dll libheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/build/libheif/*.dll README.md
+          zip -j lightning-image-viewer-$TAG_NAME_V-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll libexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER/libexif/.libs/*.dll libde265-$LIBDE265_VER/libde265-$LIBDE265_VER/build/libde265/*.dll libheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/build/libheif/*.dll /usr/lib/gcc/x86_64-w64-mingw32/13-win32/libgcc_s_seh-1.dll /usr/lib/gcc/x86_64-w64-mingw32/13-win32/libstdc++-6.dll /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll README.md
 
       - name: step-build-emscripten-install-system-deps
         run: |
