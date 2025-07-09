@@ -15,7 +15,7 @@ I created it because I like image viewing UX available on certain websites where
 
 Currently target platforms are Linux (Wayland, X11) and Windows, but it should be possible to make it work on any POSIX-compatible platform supported by SDL3 with minimal effort.
 
-Image formats support depends on SDL3_image build; SDL3_image has "built-in" support for BMP, GIF, JPEG, LBM, PCX, PNG, PNM (PPM/PGM/PBM), QOI, TGA, XCF, XPM, and simple SVG format images; it also has support for AVIF, JPEG-XL, TIFF, and WebP via "external" dependencies; Linux distros normally provide SDL3_image built with all of them.
+Image formats support depends on SDL3_image build; SDL3_image has "built-in" support for BMP, GIF, JPEG, LBM, PCX, PNG, PNM (PPM/PGM/PBM), QOI, TGA, XCF, XPM, and simple SVG format images; it also has support for AVIF, JPEG-XL, TIFF, and WebP via "external" dependencies; Linux distros normally provide SDL3_image built with all of them. There is also direct support for HEIC via libheif (and possibly for other formats supported by libheif, but I haven't tested).
 
 Note: on Linux Wayland with XWayland SDL3 currently falls back on X11 backend if Wayland compositor lacks support for fifo-v1 protocol (important for games performance, still missing in KDE Plasma kwin_wayland as of writing this). This can be overridden via `SDL_VIDEO_DRIVER=wayland` env var
 
@@ -23,7 +23,7 @@ Licensed under GPLv3. Originally published at https://github.com/shatsky/lightni
 
 ## Building and installing
 
-You can use Nix expression to build&install with Nix (naively via `nix-env -i -f default.nix`), or use it as a reference to build&install manually (this is currently a single file project, see buildPhase in derivation.nix).
+You can use Nix expression to build&install with Nix (naively via `nix-env -i -f default.nix`) or use the Makefile.
 
 Note: Nix expression depends on sdl3 and sdl3-image in nixpkgs (both added in 24.11)
 
@@ -42,7 +42,6 @@ Note: Ubuntu package is built on/for Ubuntu 25.04 (1st Ubuntu release with SDL3)
 ## Main issues
 
 - (may be not true anymore, need to test after move to SDL3_image) ~1% of images (which are viewable in common browsers) fail to load (SDL2_image IMG_Load fails, probably lacks internal error handling for malformed images)
-- no HEIC support
 - no animated images support (only 1st frame is displayed)
 - GNOME and possibly other graphical environments which have shell UI in top left display corner place invisible window at top left corner of "usable area", causing shift of visible image rectangle from intended position which is calculated with assumption that window is placed at top left display corner
 
