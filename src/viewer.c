@@ -102,6 +102,9 @@ struct State {
     struct dirent** filelist;
     int filelist_len;
     int filelist_load_i; // index of filelist item name of which is currently pointed by state.file_load_path
+    IMG_Animation* anim;
+    int anim_cur;
+    Uint64 anim_next_frame_time;
 } state;
 
 // set default state values and get ready for loading image and calling view_* functions
@@ -137,6 +140,7 @@ void init_state() {
     state.win_fullscreen = false;
     state.image_texture = NULL;
     state.filelist = NULL;
+    state.anim = NULL;
 }
 
 // not to confuse SDL filelist provided by SDL here with state.filelist
@@ -391,25 +395,59 @@ void view_reset() {
 }
 
 void load_image() {
-    // SDL has SDL_Surface which is pixmap in process mem used for software manipulation and rendering and SDL_Texture which describes entity owned by graphics hardware driver used for hardware accelerated rendering
-    // IMG_LoadTexture() shortcut fuction internally decodes image into SDL_Surface and calls SDL_CreateTextureFromSurface(); we can use it as long as we don't need to manipulate intermediate SDL_Surface
-    if (state.image_texture != NULL) {
-        // assuming it can only be non-NULL after successfull SDL_CreateTexture*() call
-        SDL_DestroyTexture(state.image_texture);
+    // SDL has:
+    // - SDL_Surface which is pixmap in process mem (in RAM) used for software manipulation and rendering
+    // - SDL_Texture which references "texture" entity owned by graphics hardware driver (usually in VRAM) used for hardware accelerated rendering
+    // image file is first decoded to SDL_Surface, which is then loaded to SDL_Texture via SDL_CreateTextureFromSurface()
+    if (state.anim != NULL) {
+        IMG_FreeAnimation(state.anim);
+        state.anim = NULL;
     }
-    state.image_texture = IMG_LoadTexture(state.renderer, state.file_load_path);
+    if (state.image_texture != NULL) {
+        SDL_DestroyTexture(state.image_texture);
+        state.image_texture = NULL;
+    }
+    // first try load as animation
+    state.anim = IMG_LoadAnimation(state.file_load_path);
+    if (state.anim != NULL) {
+        if (state.anim->count > 0) {
+            state.anim_cur = 0;
+            state.anim_next_frame_time = SDL_GetTicks() + state.anim->delays[state.anim_cur];
+            // TODO load all frames into textures before playback
+            state.image_texture = SDL_CreateTextureFromSurface(state.renderer, state.anim->frames[state.anim_cur]);
+            if (state.image_texture == NULL) {
+                SDL_Log("SDL_CreateTextureFromSurface failed: %s", SDL_GetError());
+                exit(1);
+            }
+            if (state.anim->count == 1) {
+                IMG_FreeAnimation(state.anim);
+                state.anim = NULL;
+            }
+        } else {
+            //SDL_Log("IMG_LoadAnimation returned animation with no frames");
+            IMG_FreeAnimation(state.anim);
+            state.anim = NULL;
+        }
+    }
+    if (state.image_texture == NULL) {
+        //SDL_Log("IMG_LoadAnimation failed, trying to load via IMG_LoadTexture");
+        // IMG_LoadTexture() shortcut fuction internally decodes image into SDL_Surface and calls SDL_CreateTextureFromSurface(); we can use it as long as we don't need to manipulate intermediate SDL_Surface
+        state.image_texture = IMG_LoadTexture(state.renderer, state.file_load_path);
+    }
 
 #ifdef WITH_LIBHEIF
 
     if (state.image_texture == NULL) {
-        // do not pollute logs; currently load_image() can be called unsuccessfully for many irrelevant files when handling prev/next
-        //SDL_Log("IMG_LoadTexture failed");
+        //SDL_Log("IMG_LoadTexture failed, trying to load via load_image_texture_libheif");
         state.image_texture = load_image_texture_libheif();
     }
 
 #endif
 
     if (state.image_texture == NULL) {
+        //SDL_Log("load_image_texture_libheif failed");
+        // do not pollute logs; currently load_image() can be called unsuccessfully for many irrelevant files when handling prev/next
+        //SDL_Log("all image loading methods failed, possibly not valid image file in supported format");
         state.file_load_success = false;
         return;
     }
@@ -742,7 +780,32 @@ int main(int argc, char** argv)
     // TODO consider moving all state to state obj
     char lmousebtn_pressed = false;
     char should_exit_on_lmousebtn_release = false;
-    while(SDL_WaitEvent(&event)) {
+    Uint32 now;
+    while(true) {
+        if (state.anim == NULL) {
+            if (!SDL_WaitEvent(&event)) {
+                SDL_Log("SDL_WaitEvent failed: %s", SDL_GetError());
+                break;
+            }
+        } else {
+            now = SDL_GetTicks();
+            // if next frame time missed or if event queue empty and next frame time arrives before event while waiting for event
+            if (state.anim_next_frame_time<now ||
+                !SDL_WaitEventTimeout(&event, state.anim_next_frame_time-now)) {
+                state.anim_cur = (state.anim_cur + 1) % state.anim->count;
+                // display next frame if in time, else skip
+                if (state.anim_next_frame_time >= now) {
+                    state.image_texture = SDL_CreateTextureFromSurface(state.renderer, state.anim->frames[state.anim_cur]);
+                    if (state.image_texture == NULL) {
+                        SDL_Log("SDL_CreateTextureFromSurface failed: %s", SDL_GetError());
+                    }
+                    render_window();
+                }
+                state.anim_next_frame_time += state.anim->delays[state.anim_cur];
+                continue;
+            }
+
+        }
         switch (event.type) {
             case SDL_EVENT_MOUSE_WHEEL:
                 if (event.wheel.y != 0) {
@@ -860,6 +923,5 @@ int main(int argc, char** argv)
                 exit(0);
         }
     }
-    SDL_Log("SDL_WaitEvent failed: %s", SDL_GetError());
     return 0;
 }
