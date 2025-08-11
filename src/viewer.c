@@ -105,6 +105,8 @@ struct State {
     IMG_Animation* anim;
     int anim_cur;
     Uint64 anim_next_frame_time;
+    bool anim_paused;
+    Uint64 anim_paused_time;
 } state;
 
 // set default state values and get ready for loading image and calling view_* functions
@@ -423,6 +425,7 @@ void load_image() {
                 IMG_FreeAnimation(state.anim);
                 state.anim = NULL;
             }
+            state.anim_paused = false;
         } else {
             //SDL_Log("IMG_LoadAnimation returned animation with no frames");
             IMG_FreeAnimation(state.anim);
@@ -782,7 +785,7 @@ int main(int argc, char** argv)
     char should_exit_on_lmousebtn_release = false;
     Uint32 now;
     while(true) {
-        if (state.anim == NULL) {
+        if (state.anim == NULL || state.anim_paused) {
             if (!SDL_WaitEvent(&event)) {
                 SDL_Log("SDL_WaitEvent failed: %s", SDL_GetError());
                 break;
@@ -880,6 +883,15 @@ int main(int argc, char** argv)
                     case SDL_SCANCODE_ESCAPE:
                         // quit
                         exit(0);
+                    case SDL_SCANCODE_SPACE:
+                        // toggle animation playback
+                        if (!state.anim_paused) {
+                            state.anim_paused_time = SDL_GetTicks();
+                        } else {
+                            state.anim_next_frame_time += SDL_GetTicks() - state.anim_paused_time;
+                        }
+                        state.anim_paused = !state.anim_paused;
+                        break;
                     case SDL_SCANCODE_MINUS:
                         // zoom out
                         view_zoom_to_level_at_center(state.view_zoom_level-1);
