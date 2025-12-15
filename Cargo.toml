@@ -1,0 +1,24 @@
+[package]
+name = "image-rs-ffi"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/image_rs_ffi.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+image = "0.25.9"
+jxl-oxide = { version = "0.12.5", features = ["image"] }
+# libheif-rs is optional to allow building without libheif
+# also libheif-rs/libheif-sys versioning features are exposed to allow building with system provided libheif with older version
+libheif-rs = { version = "2.5.1", default-features = false, features = ["image"], optional = true }
+
+[features]
+default = [ "libheif-latest" ]
+libheif = [ "dep:libheif-rs" ]
+libheif-v1_17 = [ "libheif", "libheif-rs/v1_17" ]
+libheif-v1_18 = [ "libheif", "libheif-rs/v1_18" ]
+libheif-v1_19 = [ "libheif", "libheif-rs/v1_19" ]
+libheif-v1_20 = [ "libheif", "libheif-rs/v1_20" ]
+libheif-latest = [ "libheif", "libheif-rs/latest" ]

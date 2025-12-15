@@ -1,10 +1,10 @@
 PREFIX = /usr/local
-CFLAGS = -DWITH_LIBEXIF -DWITH_LIBHEIF
-LDFLAGS = -lm -lSDL3 -lSDL3_image -lexif -lheif
+LDFLAGS = -lm -lSDL3 -lheif
 CC = cc
 
 all:
-	$(CC) $(CFLAGS) -o lightning-image-viewer src/viewer.c $(LDFLAGS)
+	cargo build --release
+	$(CC) $(CFLAGS) -o lightning-image-viewer src/viewer.c target/release/libimage_rs_ffi.a $(LDFLAGS)
 
 clean:
 	rm -f lightning-image-viewer

@@ -36,11 +36,11 @@ jobs:
     container:
       image: ubuntu:25.04
     env:
-      SDL_VER: 3.2.8
-      SDL_IMAGE_VER: 3.2.4
-      LIBEXIF_VER: 0.6.25
+      SDL_VER: 3.2.28
+      DAV1D_VER: 1.5.2
       LIBDE265_VER: 1.0.16
-      LIBHEIF_VER: 1.20.1
+      LIBHEIF_VER: 1.20.2
+      EMSDK_VER: 4.0.21
       DEBIAN_FRONTEND: noninteractive
       TAG_NAME_V: ${{ github.event.inputs.tag_name_v }}
 
@@ -65,17 +65,22 @@ jobs:
 
       - name: step-build-ubuntu
         run: |
-          apt install -y gcc libsdl3-dev libsdl3-image-dev libexif-dev libheif-dev
+          apt install -y gcc libsdl3-dev libheif-dev rustup make
           mkdir -p lightning-image-viewer_${TAG_NAME_V}_amd64/usr/bin lightning-image-viewer_${TAG_NAME_V}_amd64/usr/share/doc/lightning-image-viewer lightning-image-viewer_${TAG_NAME_V}_amd64/DEBIAN
-          gcc -DWITH_LIBEXIF -DWITH_LIBHEIF lightning-image-viewer/src/viewer.c -lSDL3 -lSDL3_image -lexif -lheif -lm -o lightning-image-viewer_${TAG_NAME_V}_amd64/usr/bin/lightning-image-viewer
-          cp -a lightning-image-viewer/share lightning-image-viewer_${TAG_NAME_V}_amd64/usr
+          rustup default stable
+          cd lightning-image-viewer
+          # TODO dynamically discover and set libheif version?
+          cargo build --release --no-default-features --features libheif-v1_19
+          cc -o lightning-image-viewer src/viewer.c target/release/libimage_rs_ffi.a -lm -lSDL3 -lheif
+          make DESTDIR=../lightning-image-viewer_${TAG_NAME_V}_amd64 PREFIX=/usr install
+          cd ..
           cp -a README.md lightning-image-viewer_${TAG_NAME_V}_amd64/usr/share/doc/lightning-image-viewer
           sed "s/^Version:.*/Version: $TAG_NAME_V/" lightning-image-viewer/src/control.in > lightning-image-viewer_${TAG_NAME_V}_amd64/DEBIAN/control
           dpkg --build lightning-image-viewer_${TAG_NAME_V}_amd64
 
       - name: step-test-ubuntu
         run: |
-          apt install ./lightning-image-viewer_${TAG_NAME_V}_amd64.deb
+          apt install -y ./lightning-image-viewer_${TAG_NAME_V}_amd64.deb
 
       - name: step-build-windows-install-system-deps
         run: |
@@ -83,30 +88,25 @@ jobs:
 
       - name: step-build-windows-get-sdl3
         run: |
-          if [ ! -d SDL3-devel-$SDL_VER-mingw ]; then
-            mkdir SDL3-devel-$SDL_VER-mingw
-            curl --location https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-devel-$SDL_VER-mingw.tar.gz | tar --extract --gzip --directory SDL3-devel-$SDL_VER-mingw
+          if [ ! -d SDL3-$SDL_VER ]; then
+            curl --location https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-devel-$SDL_VER-mingw.tar.gz | tar --extract --gzip SDL3-$SDL_VER
           fi
 
-      - name: step-build-windows-get-sdl3-image
+      # av1 decoder for avif
+      - name: step-build_windows-get-libheif-dav1d
         run: |
-          if [ ! -d SDL3_image-devel-$SDL_IMAGE_VER-mingw ]; then
-            mkdir SDL3_image-devel-$SDL_IMAGE_VER-mingw
-            curl --location https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-devel-$SDL_IMAGE_VER-mingw.tar.gz | tar --extract --gzip --directory SDL3_image-devel-$SDL_IMAGE_VER-mingw
+          apt install -y meson nasm
+          if [ ! -d dav1d-$DAV1D_VER ]; then
+            curl --location https://code.videolan.org/videolan/dav1d/-/archive/$DAV1D_VER/dav1d-$DAV1D_VER.tar.gz | tar --extract --gzip dav1d-$DAV1D_VER
           fi
+          cd dav1d-$DAV1D_VER
+          mkdir -p build
+          cd build
+          meson setup .. --cross-file=../package/crossfiles/x86_64-w64-mingw32.meson
+          ninja
 
-      - name: step-build_windows-get-libexif
-        run: |
-          if [ ! -d libexif-$LIBEXIF_VER ]; then
-            mkdir libexif-$LIBEXIF_VER
-            curl --location https://github.com/libexif/libexif/releases/download/v$LIBEXIF_VER/libexif-$LIBEXIF_VER.tar.gz | tar --extract --gzip --directory libexif-$LIBEXIF_VER
-          fi
-          cd libexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER
-          ./configure --host=x86_64-w64-mingw32 --disable-nls
-          make
-          cd ../..
-
-      - name: step-build_windows-get-libheif
+      # h265 decoder for heic
+      - name: step-build_windows-get-libheif-libde265
         run: |
           # https://www.mingw-w64.org/build-systems/cmake/
           cat <<EOF > toolchain-mingw64.cmake
@@ -129,78 +129,104 @@ jobs:
           set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
           EOF
           if [ ! -d libde265-$LIBDE265_VER ]; then
-            mkdir libde265-$LIBDE265_VER
-            curl --location https://github.com/strukturag/libde265/releases/download/v$LIBDE265_VER/libde265-$LIBDE265_VER.tar.gz | tar --extract --gzip --directory libde265-$LIBDE265_VER
+            curl --location https://github.com/strukturag/libde265/releases/download/v$LIBDE265_VER/libde265-$LIBDE265_VER.tar.gz | tar --extract --gzip libde265-$LIBDE265_VER
           fi
-          cd libde265-$LIBDE265_VER/libde265-$LIBDE265_VER
+          cd libde265-$LIBDE265_VER
           mkdir -p build
           cd build
-          cmake -DCMAKE_TOOLCHAIN_FILE=../../../toolchain-mingw64.cmake ..
+          cmake -DCMAKE_TOOLCHAIN_FILE=../../toolchain-mingw64.cmake ..
           make
-          cd ../../..
+
+      - name: step-build_windows-get-libheif
+        run: |
           if [ ! -d libheif-$LIBHEIF_VER ]; then
-            mkdir libheif-$LIBHEIF_VER
-            curl --location https://github.com/strukturag/libheif/releases/download/v$LIBHEIF_VER/libheif-$LIBHEIF_VER.tar.gz | tar --extract --gzip --directory libheif-$LIBHEIF_VER
+            curl --location https://github.com/strukturag/libheif/releases/download/v$LIBHEIF_VER/libheif-$LIBHEIF_VER.tar.gz | tar --extract --gzip libheif-$LIBHEIF_VER
           fi
-          cd libheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER
+          cd libheif-$LIBHEIF_VER
           mkdir -p build
           cd build
-          cmake -DCMAKE_TOOLCHAIN_FILE=../../../toolchain-mingw64.cmake -DLIBDE265_INCLUDE_DIR=../../../libde265-$LIBDE265_VER/libde265-$LIBDE265_VER -DLIBDE265_LIBRARY=../../../libde265-$LIBDE265_VER/libde265-$LIBDE265_VER/build/libde265/libde265.dll.a -DWITH_X265=OFF -DENABLE_PLUGIN_LOADING=NO --preset=release ..
+          # `-DWITH_X265=OFF -DENABLE_PLUGIN_LOADING=NO` ?
+          cmake -DCMAKE_TOOLCHAIN_FILE=../../toolchain-mingw64.cmake -DDAV1D_INCLUDE_DIR=../../dav1d-$DAV1D_VER/include -DDAV1D_LIBRARY=../../dav1d-$DAV1D_VER/build/src/libdav1d.dll.a -DLIBDE265_INCLUDE_DIR=../../libde265-$LIBDE265_VER -DLIBDE265_LIBRARY=../../libde265-$LIBDE265_VER/build/libde265/libde265.dll.a -DWITH_X265=OFF -DENABLE_PLUGIN_LOADING=NO --preset=release ..
           make
-          cd ../../..
 
       - name: step-build-windows-build
         run: |
           magick lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg lightning-image-viewer.ico
           x86_64-w64-mingw32-windres lightning-image-viewer/src/viewer.rc icon.o
-          x86_64-w64-mingw32-gcc -DWITH_LIBEXIF -DWITH_LIBHEIF lightning-image-viewer/src/viewer.c icon.o -ISDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/include -ISDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/include -Ilibexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER -LSDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/lib -Ilibheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/libheif/api -Ilibheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/build -LSDL3_image-devel-$SDL_IMAGE_VER-mingw/SDL3_image-$SDL_IMAGE_VER/x86_64-w64-mingw32/lib -Llibexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER/libexif/.libs -Llibheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/build/libheif -l:libSDL3.dll.a -l:libSDL3_image.dll.a -l:libexif.dll.a -l:libheif.dll.a -mwindows -o lightning-image-viewer.exe
+          rustup target add x86_64-pc-windows-gnu
+          cd lightning-image-viewer
+          # create script which cargo can run instead of pkg-config to discover previously built libheif
+          # assuming that libheif version is satisfying libheif-rs/libheif-sys default minimal version requirement
+          cat <<EOF > ../pkg-config-libheif
+          #!/bin/sh
 
-      - name: step-build-windows-get-sdl3-image-with-ext-deps
-        run: |
-          if [ ! -d SDL3_image-$SDL_IMAGE_VER-win32-x64 ]; then
-            if [ ! -f SDL3_image-$SDL_IMAGE_VER-win32-x64.zip ]; then
-              curl --location --remote-name https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER-win32-x64.zip
-            fi
-            mkdir SDL3_image-$SDL_IMAGE_VER-win32-x64
-            unzip -d SDL3_image-$SDL_IMAGE_VER-win32-x64 SDL3_image-$SDL_IMAGE_VER-win32-x64.zip
+          # --libs --cflags libheif 'libheif >= \$version_from_cargo'
+          if [ "\$1" = "--libs" ] && [ "\$2" = "--cflags" ] && [ "\$3" = "libheif" ]; then
+            echo "-I/home/user/Projects/lightning-image-viewer/libheif-$LIBHEIF_VER/libheif/api -lheif"
+            exit 0
           fi
+
+          # --modversion libheif 'libheif >= \$version_from_cargo'
+          if [ "\$1" = "--modversion" ] && [ "\$2" = "libheif" ]; then
+            echo $LIBHEIF_VER
+            echo $LIBHEIF_VER
+            exit 0
+          fi
+
+          echo "pkg-config-libheif called with unsupported args" >&2
+          exit 1
+          EOF
+          chmod a+x ../pkg-config-libheif
+          env PKG_CONFIG=$PWD/../pkg-config-libheif PKG_CONFIG_ALLOW_CROSS=1 cargo build --target x86_64-pc-windows-gnu --release
+          cd ..
+          # `-lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -lkernel32` for cargo-built objects, are they all needed?
+          x86_64-w64-mingw32-gcc lightning-image-viewer/src/viewer.c lightning-image-viewer/target/x86_64-pc-windows-gnu/release/libimage_rs_ffi.a icon.o -ISDL3-$SDL_VER/x86_64-w64-mingw32/include -Ilibheif-$LIBHEIF_VER/libheif/api -LSDL3-$SDL_VER/x86_64-w64-mingw32/lib -Llibheif-$LIBHEIF_VER/build/libheif -l:libSDL3.dll.a -l:libheif.dll.a -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -lkernel32 -mwindows -o lightning-image-viewer.exe
 
       - name: step-build-windows-create-archive
         run: |
-          zip -j lightning-image-viewer-$TAG_NAME_V-win32-x64.zip lightning-image-viewer.exe SDL3-devel-$SDL_VER-mingw/SDL3-$SDL_VER/x86_64-w64-mingw32/bin/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/*.dll SDL3_image-$SDL_IMAGE_VER-win32-x64/optional/*.dll libexif-$LIBEXIF_VER/libexif-$LIBEXIF_VER/libexif/.libs/*.dll libde265-$LIBDE265_VER/libde265-$LIBDE265_VER/build/libde265/*.dll libheif-$LIBHEIF_VER/libheif-$LIBHEIF_VER/build/libheif/*.dll /usr/lib/gcc/x86_64-w64-mingw32/13-win32/libgcc_s_seh-1.dll /usr/lib/gcc/x86_64-w64-mingw32/13-win32/libstdc++-6.dll /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll README.md
+          # TODO is libwinpthread-1.dll needed?
+          zip -j lightning-image-viewer-$TAG_NAME_V-win32-x64.zip lightning-image-viewer.exe SDL3-$SDL_VER/x86_64-w64-mingw32/bin/SDL3.dll dav1d-$DAV1D_VER/build/src/libdav1d.dll libde265-$LIBDE265_VER/build/libde265/libde265.dll libheif-$LIBHEIF_VER/build/libheif/libheif.dll /usr/lib/gcc/x86_64-w64-mingw32/13-win32/libgcc_s_seh-1.dll /usr/lib/gcc/x86_64-w64-mingw32/13-win32/libstdc++-6.dll /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll README.md
 
-      - name: step-build-emscripten-install-system-deps
+      # emscripten enstalled via emsdk because ubuntu repo has incompatible versions of emcc and wasm-opt, passing cargo-built wasm obj to emcc causes it to call wasm-opt with unsupported arg
+      - name: step-build-emscripten-get-emsdk
         run: |
-          apt install -y emscripten cmake
-
-      - name: step-build-emscripten-get-and-build-sdl3
-        run: |
-          if [ ! -d SDL3-$SDL_VER ]; then
-            mkdir SDL3-$SDL_VER
-            curl --location https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-$SDL_VER.tar.gz | tar --extract --gzip --directory SDL3-$SDL_VER
+          # emsdk fetches xz-compressed
+          apt install -y xz-utils
+          if [ ! -d emsdk-$EMSDK_VER ]; then
+            curl --location https://github.com/emscripten-core/emsdk/archive/refs/tags/$EMSDK_VER.tar.gz | tar --extract --gzip emsdk-$EMSDK_VER
           fi
-          mkdir -p SDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten
-          cd SDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten
+          cd emsdk-$EMSDK_VER
+          ./emsdk install latest
+          ./emsdk activate latest
+          #source ./emsdk_env.sh
+
+      - name: step-build-emscripten-get-sdl3
+        run: |
+          cd emsdk-$EMSDK_VER
+          . ./emsdk_env.sh
+          cd ..
+          # SDL3-$SDL_VER/x86_64-w64-mingw32/ already exists
+          if [ ! -d SDL3-$SDL_VER ] || [ ! -f SDL3-$SDL_VER/CMakeLists.txt ]; then
+            curl --location https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-$SDL_VER.tar.gz | tar --extract --gzip SDL3-$SDL_VER
+          fi
+          mkdir -p SDL3-$SDL_VER/build.emscripten
+          cd SDL3-$SDL_VER/build.emscripten
           emcmake cmake ..
           emmake make -j4
-          cd ../../..
-
-      - name: step-build-emscripten-get-and-build-sdl3-image
-        run: |
-          if [ ! -d SDL3_image-$SDL_IMAGE_VER ]; then
-            mkdir SDL3_image-$SDL_IMAGE_VER
-            curl --location https://github.com/libsdl-org/SDL_image/releases/download/release-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER.tar.gz | tar --extract --gzip --directory SDL3_image-$SDL_IMAGE_VER
-          fi
-          mkdir -p SDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten
-          cd SDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten
-          emcmake cmake .. -DSDL3_DIR=$GITHUB_WORKSPACE/SDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten
-          emmake make -j4
-          cd ../../..
 
       - name: step-build-emscripten-build
         run: |
+          cd emsdk-$EMSDK_VER
+          . ./emsdk_env.sh
+          cd ..
+          # somewhy emsdk_env.sh doesn't add this, needed for wasm-opt
+          export PATH=$PWD/emsdk-$EMSDK_VER/upstream/bin:$PATH
           mkdir -p pages
-          emcc -ISDL3-$SDL_VER/SDL3-$SDL_VER/include -ISDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/include -LSDL3-$SDL_VER/SDL3-$SDL_VER/build.emscripten -LSDL3_image-$SDL_IMAGE_VER/SDL3_image-$SDL_IMAGE_VER/build.emscripten -lSDL3 -lSDL3_image -sEXPORTED_RUNTIME_METHODS="['callMain']" -sASYNCIFY -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH lightning-image-viewer/src/viewer.c -o pages/lightning-image-viewer.js
+          rustup target add wasm32-unknown-emscripten
+          cd lightning-image-viewer
+          cargo build --target wasm32-unknown-emscripten --release --no-default-features
+          cd ..
+          emcc -ISDL3-$SDL_VER/include -LSDL3-$SDL_VER/build.emscripten -lSDL3 -sEXPORTED_RUNTIME_METHODS="['callMain']" -sASYNCIFY -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH lightning-image-viewer/src/viewer.c lightning-image-viewer/target/wasm32-unknown-emscripten/release/libimage_rs_ffi.a -o pages/lightning-image-viewer.js
           cp -a lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg pages
           sed "s?{{ GITHUB_SHA }}?$GITHUB_SHA?g;s?{{ TAG_NAME }}?v$TAG_NAME_V?g" lightning-image-viewer/src/index.html.in > pages/index.html
 

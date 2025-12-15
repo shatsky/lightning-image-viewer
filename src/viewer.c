@@ -1,6 +1,6 @@
 /* 
  * Lightning Image Viewer
- * Copyright (c) 2021 Eugene Shatsky
+ * Copyright (c) 2021-2025 Eugene Shatsky
  * 
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,20 +23,11 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <unistd.h> // chdir
+#include <limits.h> // INT_MAX
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_mutex.h>
-#include <SDL3_image/SDL_image.h>
 
-#ifdef WITH_LIBEXIF
-
-#include <libexif/exif-data.h>
-
-#endif
-#ifdef WITH_LIBHEIF
-
-#include <libheif/heif.h>
-
-#endif
+#include "image_rs_ffi.h"
 
 #define APP_NAME "Lightning Image Viewer"
 #define WIN_TITLE_TAIL " - " APP_NAME
@@ -67,10 +58,21 @@
 // TODO is it nessessary to call SDL_DestroyWindow() or smth else before exit()? See also SDL_Quit(), atexit()
 // TODO add macro to "call function, check return val, log err and exit in case of failure" for bool SDL functions which return false in case of failure and set err
 
+// TODO image-rs and SDL types
+struct Frame {
+    SDL_Texture* texture;
+    uint32_t width;
+    uint32_t height;
+    uint32_t x_offset;
+    uint32_t y_offset;
+    Uint64 delay;
+};
+
 struct State {
     // cur_x, _y: coords of current point (under cursor)
     // pre_mv: at start of move (drag) action
     char* file_load_path;
+    bool file_load_initial;
     bool file_load_success;
     SDL_Semaphore* file_dialog_semaphore;
     SDL_Window* window;
@@ -82,6 +84,10 @@ struct State {
     float win_pre_mv_cur_y;
     char win_fullscreen;
     SDL_Renderer* renderer;
+    // SDL has:
+    // - SDL_Surface which is pixmap in process mem (in RAM) used for software manipulation and rendering
+    // - SDL_Texture which references "texture" entity owned by graphics hardware driver (usually in VRAM) used for hardware accelerated rendering
+    // image file is first decoded to SDL_Surface, which is then loaded to SDL_Texture via SDL_CreateTextureFromSurface()
     SDL_Texture* image_texture;
     int img_w;
     int img_h;
@@ -102,8 +108,9 @@ struct State {
     struct dirent** filelist;
     int filelist_len;
     int filelist_load_i; // index of filelist item name of which is currently pointed by state.file_load_path
-    IMG_Animation* anim;
-    int anim_cur;
+    struct Frame* anim_frames;
+    size_t anim_frames_count;
+    size_t anim_cur;
     Uint64 anim_next_frame_time;
     bool anim_paused;
     Uint64 anim_paused_time;
@@ -111,6 +118,7 @@ struct State {
 
 // set default state values and get ready for loading image and calling view_* functions
 void init_state() {
+    state.file_load_initial = true;
     // TODO current display in multi monitor setup?
     // TODO does it make sense that SDL requires window size with SDL_WINDOW_MAXIMIZED?
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -142,7 +150,7 @@ void init_state() {
     state.win_fullscreen = false;
     state.image_texture = NULL;
     state.filelist = NULL;
-    state.anim = NULL;
+    state.anim_frames = NULL;
 }
 
 // not to confuse SDL filelist provided by SDL here with state.filelist
@@ -177,145 +185,53 @@ static void SDLCALL file_dialog_callback(void* userdata, const char * const *fil
     }
 }
 
-#ifdef WITH_LIBHEIF
-
-// SDL_image does not support HEIC, so if its IMG_LoadTexture() fails, we also try this
-SDL_Texture* load_image_texture_libheif() {
-    struct heif_context* ctx = heif_context_alloc();
-    if (ctx == NULL) {
-        SDL_Log("heif_context_alloc failed");
-        return NULL;
-    }
-
-    struct heif_error err;
-    err = heif_context_read_from_file(ctx, state.file_load_path, NULL);
-    if (err.code != heif_error_Ok) {
-        //SDL_Log("heif_context_read_from_file failed: %s", err.message);
-        heif_context_free(ctx);
-        return NULL;
-    }
-
-    struct heif_image_handle *handle = NULL;
-    err = heif_context_get_primary_image_handle(ctx, &handle);
-    if (err.code!=heif_error_Ok || handle==NULL) {
-        //SDL_Log("heif_context_get_primary_image_handle failed: %s", err.message);
-        if (handle != NULL) {
-            heif_image_handle_release(handle);
-        }
-        heif_context_free(ctx);
-        return NULL;
-    }
-
-    struct heif_image *img = NULL;
-    err = heif_decode_image(handle, &img, heif_colorspace_RGB, heif_chroma_interleaved_RGBA, NULL);
-    heif_image_handle_release(handle);
-    if (err.code!=heif_error_Ok || img==NULL) {
-        //SDL_Log("heif_decode_image failed: %s", err.message);
-        if (img != NULL) {
-            heif_image_release(img);
-        }
-        heif_context_free(ctx);
-        return NULL;
-    }
-
-    int width = heif_image_get_width(img, heif_channel_interleaved);
-    int height = heif_image_get_height(img, heif_channel_interleaved);
-    int stride;
-    const uint8_t *pixels = heif_image_get_plane_readonly(img, heif_channel_interleaved, &stride);
-    if (pixels == NULL) {
-        //SDL_Log("heif_image_get_plane_readonly failed");
-        heif_image_release(img);
-        heif_context_free(ctx);
-        return NULL;
-    }
-
-    SDL_Surface *surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_ABGR8888);
-    if (surface == NULL) {
-        SDL_Log("SDL_CreateSurface failed: %s", SDL_GetError());
-        heif_image_release(img);
-        heif_context_free(ctx);
-        return NULL;
-    }
-
-    for (int y=0; y<height; y++) {
-        memcpy(surface->pixels+y*surface->pitch, pixels+y*stride, width*4);
-    }
-    heif_image_release(img);
-    heif_context_free(ctx);
-
-    SDL_Texture *texture = SDL_CreateTextureFromSurface(state.renderer, surface);
-    if (texture == NULL) {
-        SDL_Log("SDL_CreateTextureFromSurface failed: %s", SDL_GetError());
-    }
-
-    SDL_DestroySurface(surface);
-
-    return texture;
+// fake
+// image-rs image::Frame has dimensions and offsets, suggesting it can be subregion of full image area, but it seems that all 3 decoders currently implementing AnimationDecoder always return pre composed frames with full dimensions and zero offsets
+// API-safe impl would need to clear image_texture subregion and blit into it
+void compose_anim_frame() {
+    state.image_texture = state.anim_frames[state.anim_cur].texture;
 }
 
-#endif
-
 // set initial orientation, called upon loading image
-// SDL3_image doesn't use JPEG EXIF orientation metadata, nor does it provide access to it
-// TODO turn this into metadata loader capable of displaying thumbnail ahead of full image loading
-void set_init_orient() {
-    state.view_init_rotate_angle_q = 0;
-    state.view_init_mirror = false;
-
-#ifdef WITH_LIBEXIF
-
-    // TODO avoid re-reading file, or at least doing this for formats for which it is not relevant
-    // TODO libexif seems to be able to load only from JPEG (of relevant formats), see ExifLoaderDataFormat. Is  it relevant for any other relevant format? TIFF has support for embedding EXIF metadata defined in EXIF spec itself, PNG and most "post-JPEG" lossy formats have it in their specs, but browsers and viewers support for using it for orientation for non-JPEG formats seems very inconsistent, also most "post-JPEG" lossy formats have their own header fields for orientation, and "external" deps of SDL3_image might handle it internally
-    // note: there's huge mess about meaning of words JPEG (which can mean JPEG compression method itself or be synonym for JFIF and EXIF file format), JFIF (original file format for storing JPEG compressed image) and EXIF (metadata format or another file format for storing JPEG, which is described in EXIF spec in such strange way that it's unclear if it's separate file format or incorrect description of embedding EXIF metadata in JFIF)
-    //ExifData *exif_data = exif_data_new_from_data(data, data_len);
-    ExifData *exif_data = exif_data_new_from_file(state.file_load_path); // free(exif_data): after exit_orientation is checked
-    if (exif_data != NULL)
-    {
-        ExifEntry *exif_entry = exif_data_get_entry(exif_data, EXIF_TAG_ORIENTATION); // free(exif_entry): never, this does not allocate, returns ptr to offset in exif_data
-        if (exif_entry != NULL) {
-            ExifByteOrder exif_byte_order = exif_data_get_byte_order(exif_data);
-            int exif_orientation = exif_get_short(exif_entry->data, exif_byte_order);
-            switch(exif_orientation) {
-                // TODO expression? Declare array and select from it by index?
-                //case 1:
-                //    state.view_init_rotate_angle_q = 0;
-                //    state.view_init_mirror = false;
-                //    break;
-                case 2:
-                    //state.view_init_rotate_angle_q = 0;
-                    state.view_init_mirror = true;
-                    break;
-                case 3:
-                    state.view_init_rotate_angle_q = 2;
-                    //state.view_init_mirror = false;
-                    break;
-                case 4:
-                    state.view_init_rotate_angle_q = 2;
-                    state.view_init_mirror = true;
-                    break;
-                case 5:
-                    state.view_init_rotate_angle_q = 1;
-                    state.view_init_mirror = true;
-                    break;
-                case 6:
-                    state.view_init_rotate_angle_q = 1;
-                    //state.view_init_mirror = false;
-                    break;
-                case 7:
-                    state.view_init_rotate_angle_q = 3;
-                    state.view_init_mirror = true;
-                    break;
-                case 8:
-                    state.view_init_rotate_angle_q = 3;
-                    //state.view_init_mirror = false;
-                    break;
-            }
-        }
-        exif_data_free(exif_data);
+void set_init_orient(uint8_t exif_orientation) {
+    switch(exif_orientation) {
+        // TODO expression? Declare array and select from it by index?
+        //case 1:
+        //    state.view_init_rotate_angle_q = 0;
+        //    state.view_init_mirror = false;
+        //    break;
+        case 2:
+            state.view_init_rotate_angle_q = 0;
+            state.view_init_mirror = true;
+            break;
+        case 3:
+            state.view_init_rotate_angle_q = 2;
+            state.view_init_mirror = false;
+            break;
+        case 4:
+            state.view_init_rotate_angle_q = 2;
+            state.view_init_mirror = true;
+            break;
+        case 5:
+            state.view_init_rotate_angle_q = 1;
+            state.view_init_mirror = true;
+            break;
+        case 6:
+            state.view_init_rotate_angle_q = 1;
+            state.view_init_mirror = false;
+            break;
+        case 7:
+            state.view_init_rotate_angle_q = 3;
+            state.view_init_mirror = true;
+            break;
+        case 8:
+            state.view_init_rotate_angle_q = 3;
+            state.view_init_mirror = false;
+            break;
+        default:
+            state.view_init_rotate_angle_q = 0;
+            state.view_init_mirror = false;
     }
-
-#endif
-
 }
 
 // non-redrawing, only update scale and view_rect size
@@ -397,63 +313,125 @@ void view_reset() {
 }
 
 void load_image() {
-    // SDL has:
-    // - SDL_Surface which is pixmap in process mem (in RAM) used for software manipulation and rendering
-    // - SDL_Texture which references "texture" entity owned by graphics hardware driver (usually in VRAM) used for hardware accelerated rendering
-    // image file is first decoded to SDL_Surface, which is then loaded to SDL_Texture via SDL_CreateTextureFromSurface()
-    if (state.anim != NULL) {
-        IMG_FreeAnimation(state.anim);
-        state.anim = NULL;
+    // free previous
+    if (state.anim_frames != NULL) {
+        while (state.anim_frames_count--) {
+            if (state.image_texture == state.anim_frames[state.anim_frames_count].texture) {
+                state.image_texture = NULL;
+            }
+            SDL_DestroyTexture(state.anim_frames[state.anim_frames_count].texture);
+        }
+        free(state.anim_frames);
+        state.anim_frames = NULL;
     }
     if (state.image_texture != NULL) {
         SDL_DestroyTexture(state.image_texture);
         state.image_texture = NULL;
     }
-    // first try load as animation
-    state.anim = IMG_LoadAnimation(state.file_load_path);
-    if (state.anim != NULL) {
-        if (state.anim->count > 0) {
-            state.anim_cur = 0;
-            state.anim_next_frame_time = SDL_GetTicks() + state.anim->delays[state.anim_cur];
-            // TODO load all frames into textures before playback
-            state.image_texture = SDL_CreateTextureFromSurface(state.renderer, state.anim->frames[state.anim_cur]);
-            if (state.image_texture == NULL) {
+
+    state.file_load_success = false;
+
+    // only terminate upon failure of functions which shouldn't fail because of invalid image file
+    // only print non-terminal errs for initial file; when switching prev/next, loading of many non-image files may be attempted
+    // TODO validation of data from image-rs is probably redundant
+    void *image_rs_ffi_decoder = image_rs_ffi_get_decoder(state.file_load_path);
+    if (image_rs_ffi_decoder == NULL) {
+        if (state.file_load_initial) {
+            SDL_Log("image_rs_ffi_get_decoder failed");
+        }
+        return;
+    }
+    uint8_t exif_orientation = image_rs_ffi_get_orientation_as_exif(image_rs_ffi_decoder);
+    void *image_rs_ffi_frames_iter = image_rs_ffi_get_frames_iter(image_rs_ffi_decoder);
+    if (image_rs_ffi_frames_iter != NULL) {
+        // anim
+        image_rs_ffi_decoder = NULL;
+        struct image_rs_ffi_Frames image_rs_ffi_frames = image_rs_ffi_get_frames(image_rs_ffi_frames_iter); // image_rs_ffi_free_frames(): after loading frames
+        image_rs_ffi_frames_iter = NULL;
+        state.anim_frames_count = image_rs_ffi_frames.count;
+        if (state.anim_frames_count > 0) {
+            state.anim_frames = malloc(sizeof(struct Frame)*state.anim_frames_count); // free(): upon next load_image()
+            if (state.anim_frames == NULL) {
+                SDL_Log("malloc failed");
+                exit(1);
+            }
+        }
+        for(int i=0; i<state.anim_frames_count; i++) {
+            state.anim_frames[i].width = image_rs_ffi_frames.ffi_frames_vec_data[i].width;
+            state.anim_frames[i].height = image_rs_ffi_frames.ffi_frames_vec_data[i].height;
+            state.anim_frames[i].x_offset = image_rs_ffi_frames.ffi_frames_vec_data[i].x_offset;
+            state.anim_frames[i].y_offset = image_rs_ffi_frames.ffi_frames_vec_data[i].y_offset;
+            // TODO
+            // TODO single frame?
+            if (image_rs_ffi_frames.ffi_frames_vec_data[i].delay_denom_ms == 0) {
+                state.anim_frames_count = i;
+                break;
+            }
+            state.anim_frames[i].delay = (Uint64)image_rs_ffi_frames.ffi_frames_vec_data[i].delay_numer_ms / (Uint64)image_rs_ffi_frames.ffi_frames_vec_data[i].delay_denom_ms;
+            // TODO
+            if (image_rs_ffi_frames.ffi_frames_vec_data[i].buf == NULL) {
+                state.anim_frames_count = i;
+                break;
+            }
+            // TODO
+            if (state.anim_frames[i].width>INT_MAX/4 || (state.anim_frames[i].height!=0 && state.anim_frames[i].width*4>INT_MAX/state.anim_frames[i].height)) {
+                state.anim_frames_count = i;
+                break;
+            }
+            SDL_Surface* surface = SDL_CreateSurfaceFrom((int)state.anim_frames[i].width, (int)state.anim_frames[i].height, SDL_PIXELFORMAT_ABGR8888, image_rs_ffi_frames.ffi_frames_vec_data[i].buf, (int)state.anim_frames[i].width*4);
+            if (surface == NULL) {
+                SDL_Log("SDL_CreateSurfaceFrom failed: %s", SDL_GetError());
+                exit(1);
+            }
+            state.anim_frames[i].texture = SDL_CreateTextureFromSurface(state.renderer, surface);
+            if (state.anim_frames[i].texture == NULL) {
                 SDL_Log("SDL_CreateTextureFromSurface failed: %s", SDL_GetError());
                 exit(1);
             }
-            if (state.anim->count == 1) {
-                IMG_FreeAnimation(state.anim);
-                state.anim = NULL;
-            }
-            state.anim_paused = false;
-        } else {
-            //SDL_Log("IMG_LoadAnimation returned animation with no frames");
-            IMG_FreeAnimation(state.anim);
-            state.anim = NULL;
+            SDL_DestroySurface(surface);
         }
-    }
-    if (state.image_texture == NULL) {
-        //SDL_Log("IMG_LoadAnimation failed, trying to load via IMG_LoadTexture");
-        // IMG_LoadTexture() shortcut fuction internally decodes image into SDL_Surface and calls SDL_CreateTextureFromSurface(); we can use it as long as we don't need to manipulate intermediate SDL_Surface
-        state.image_texture = IMG_LoadTexture(state.renderer, state.file_load_path);
+        image_rs_ffi_free_frames(image_rs_ffi_frames);
+        state.anim_cur = 0;
+        if (state.anim_frames_count > 0) {
+            compose_anim_frame(); // set state.image_texture
+            state.anim_next_frame_time = SDL_GetTicks() + state.anim_frames[0].delay;
+        } else {
+            if (state.file_load_initial) {
+                SDL_Log("image_rs_ffi_get_frames returned 0 valid frames");
+            }
+            return;
+        }
+        state.anim_paused = false;
+    } else {
+        // still
+        struct image_rs_ffi_RgbaImage image_rs_ffi_rgba_image = image_rs_ffi_get_rgba_image(image_rs_ffi_decoder); // image_rs_ffi_free_rgba_image(): after loading texture or before any return earlier
+        image_rs_ffi_decoder = NULL;
+        if (image_rs_ffi_rgba_image.buf == NULL) {
+            if (state.file_load_initial) {
+                SDL_Log("image_rs_ffi_get_rgba_image failed");
+            }
+            image_rs_ffi_free_rgba_image(image_rs_ffi_rgba_image);
+            return;
+        }
+        // TODO
+        if (image_rs_ffi_rgba_image.width>INT_MAX/4 || (image_rs_ffi_rgba_image.height!=0 && image_rs_ffi_rgba_image.width*4>INT_MAX/image_rs_ffi_rgba_image.height)) {
+            image_rs_ffi_free_rgba_image(image_rs_ffi_rgba_image);
+            return;
+        }
+        SDL_Surface* surface = SDL_CreateSurfaceFrom((int)image_rs_ffi_rgba_image.width, (int)image_rs_ffi_rgba_image.height, SDL_PIXELFORMAT_ABGR8888, image_rs_ffi_rgba_image.buf, (int)image_rs_ffi_rgba_image.width*4);
+        if (surface == NULL) {
+            SDL_Log("SDL_CreateSurfaceFrom failed: %s", SDL_GetError());
+            exit(1);
+        }
+        state.image_texture = SDL_CreateTextureFromSurface(state.renderer, surface);
+        if (state.image_texture == NULL) {
+            SDL_Log("SDL_CreateTextureFromSurface failed: %s", SDL_GetError());
+            exit(1);
+        }
+        SDL_DestroySurface(surface);
+        image_rs_ffi_free_rgba_image(image_rs_ffi_rgba_image);
     }
 
-#ifdef WITH_LIBHEIF
-
-    if (state.image_texture == NULL) {
-        //SDL_Log("IMG_LoadTexture failed, trying to load via load_image_texture_libheif");
-        state.image_texture = load_image_texture_libheif();
-    }
-
-#endif
-
-    if (state.image_texture == NULL) {
-        //SDL_Log("load_image_texture_libheif failed");
-        // do not pollute logs; currently load_image() can be called unsuccessfully for many irrelevant files when handling prev/next
-        //SDL_Log("all image loading methods failed, possibly not valid image file in supported format");
-        state.file_load_success = false;
-        return;
-    }
     state.file_load_success = true;
     state.img_w = state.image_texture->w;
     state.img_h = state.image_texture->h;
@@ -479,7 +457,7 @@ void load_image() {
         exit(1);
     }
     free(win_title);
-    set_init_orient();
+    set_init_orient(exif_orientation);
     view_reset();
 }
 
@@ -595,7 +573,23 @@ int scandir_compar_mtime(const struct dirent** dir_entry1, const struct dirent**
         SDL_Log("stat failed: %s", strerror(errno));
         exit(1);
     }
-    return dir_entry2_stat_buf.st_mtime - dir_entry1_stat_buf.st_mtime;
+
+// TODO subsecond precision seems not available on Windows from mingw stat, need to use GetFileInformationByHandleEx info.LastWriteTime.QuadPart
+#ifndef _WIN32
+
+    if (dir_entry1_stat_buf.st_mtim.tv_sec != dir_entry2_stat_buf.st_mtim.tv_sec)
+        return (dir_entry1_stat_buf.st_mtim.tv_sec < dir_entry2_stat_buf.st_mtim.tv_sec) ? 1 : -1;
+    if (dir_entry1_stat_buf.st_mtim.tv_nsec != dir_entry2_stat_buf.st_mtim.tv_nsec)
+        return (dir_entry1_stat_buf.st_mtim.tv_nsec < dir_entry2_stat_buf.st_mtim.tv_nsec) ? 1 : -1;
+
+#else
+
+    if (dir_entry1_stat_buf.st_mtime != dir_entry2_stat_buf.st_mtime)
+        return (dir_entry1_stat_buf.st_mtime < dir_entry2_stat_buf.st_mtime) ? 1 : -1;
+
+#endif
+
+    return strcmp((*dir_entry1)->d_name, (*dir_entry2)->d_name);
 }
 
 #ifdef _WIN32
@@ -719,7 +713,7 @@ void load_next_image(bool reverse) {
             load_image();
             if (!state.file_load_success) {
                 SDL_Log("load_image failed; failed to reload file");
-                view_reset();
+                exit(1);
             }
             SDL_SetEventEnabled(SDL_EVENT_KEY_DOWN, true);
             return;
@@ -734,7 +728,7 @@ void load_next_image(bool reverse) {
     } while (!state.file_load_success && state.filelist_load_i!=filelist_load_i_saved);
     if (!state.file_load_success) {
         SDL_Log("load_image failed; wrapped around filelist and failed to load any file");
-        view_reset();
+        exit(1);
     }
 
     SDL_SetEventEnabled(SDL_EVENT_KEY_DOWN, true);
@@ -778,6 +772,7 @@ int main(int argc, char** argv)
         SDL_Log("load_image failed; failed to load initial file");
         exit(1);
     }
+    state.file_load_initial = false;
     // event loop
     SDL_Event event;
     // TODO consider moving all state to state obj
@@ -785,7 +780,7 @@ int main(int argc, char** argv)
     char should_exit_on_lmousebtn_release = false;
     Uint32 now;
     while(true) {
-        if (state.anim == NULL || state.anim_paused) {
+        if (state.anim_frames == NULL || state.anim_frames_count<2 || state.anim_paused) {
             if (!SDL_WaitEvent(&event)) {
                 SDL_Log("SDL_WaitEvent failed: %s", SDL_GetError());
                 break;
@@ -795,16 +790,13 @@ int main(int argc, char** argv)
             // if next frame time missed or if event queue empty and next frame time arrives before event while waiting for event
             if (state.anim_next_frame_time<now ||
                 !SDL_WaitEventTimeout(&event, state.anim_next_frame_time-now)) {
-                state.anim_cur = (state.anim_cur + 1) % state.anim->count;
+                state.anim_cur = (state.anim_cur + 1) % state.anim_frames_count;
                 // display next frame if in time, else skip
                 if (state.anim_next_frame_time >= now) {
-                    state.image_texture = SDL_CreateTextureFromSurface(state.renderer, state.anim->frames[state.anim_cur]);
-                    if (state.image_texture == NULL) {
-                        SDL_Log("SDL_CreateTextureFromSurface failed: %s", SDL_GetError());
-                    }
+                    compose_anim_frame();
                     render_window();
                 }
-                state.anim_next_frame_time += state.anim->delays[state.anim_cur];
+                state.anim_next_frame_time += state.anim_frames[state.anim_cur].delay;
                 continue;
             }
 
