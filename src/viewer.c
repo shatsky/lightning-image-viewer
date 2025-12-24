@@ -36,6 +36,42 @@
 // leaflet.js keyboardPanDelta default value is 80 https://leafletjs.com/reference.html
 #define KEYBOARD_PAN_DELTA 40
 
+// build time config
+// shadow
+// usually defined through exp and offset_{x, y}
+// expand: 6px; offset_x: 0px; offset_y: 1px
+// top, left: expand-offset_{y, x}
+// right, bottom: expand+offset_{x, y}
+#ifndef FRAME_WIDTH_TOP
+    #define FRAME_WIDTH_TOP 5
+#endif
+#ifndef FRAME_WIDTH_RIGHT
+    #define FRAME_WIDTH_RIGHT 6
+#endif
+#ifndef FRAME_WIDTH_BOTTOM
+    #define FRAME_WIDTH_BOTTOM 7
+#endif
+#ifndef FRAME_WIDTH_LEFT
+    #define FRAME_WIDTH_LEFT 6
+#endif
+#ifndef FRAME_COLOR
+    #define FRAME_COLOR 0x00, 0x00, 0x00, 38
+#endif
+// non fullscreen
+#ifndef IMAGE_BACKGROUND_COLOR
+    #define IMAGE_BACKGROUND_COLOR 0xff, 0xff, 0xff, 0xff
+#endif
+#ifndef SCALEMODE_LOWER
+    #define SCALEMODE_LOWER SDL_SCALEMODE_LINEAR
+#endif
+#ifndef SCALEMODE_EQUAL
+    #define SCALEMODE_EQUAL SDL_SCALEMODE_NEAREST
+#endif
+#ifndef SCALEMODE_GREATER
+    #define SCALEMODE_GREATER SDL_SCALEMODE_LINEAR
+#endif
+
+
 #ifndef _WIN32
     #define PATH_SEP '/'
 #else
@@ -272,12 +308,38 @@ void render_window() {
         view_rect.y = (state.win_h - view_rect.h) / 2;
     } else {
         view_rect = state.view_rect;
+        // draw shadow and clear image bg
+        SDL_FRect shadow_rect = {
+            .x = view_rect.x - FRAME_WIDTH_LEFT,
+            .y = view_rect.y - FRAME_WIDTH_TOP,
+            .w = view_rect.w + FRAME_WIDTH_LEFT + FRAME_WIDTH_RIGHT,
+            .h = view_rect.h + FRAME_WIDTH_TOP + FRAME_WIDTH_BOTTOM
+        };
+        if (!SDL_SetRenderDrawColor(state.renderer, FRAME_COLOR)) {
+            SDL_Log("SDL_SetRenderDrawColor failed: %s", SDL_GetError());
+            exit(1);
+        }
+        if (!SDL_RenderFillRect(state.renderer, &shadow_rect)) {
+            SDL_Log("SDL_RenderFillRect failed: %s", SDL_GetError());
+            exit(1);
+        }
+        if (!SDL_SetRenderDrawColor(state.renderer, IMAGE_BACKGROUND_COLOR)) {
+            SDL_Log("SDL_SetRenderDrawColor failed: %s", SDL_GetError());
+            exit(1);
+        }
+        if (!SDL_RenderFillRect(state.renderer, &view_rect)) {
+            SDL_Log("SDL_RenderFillRect failed: %s", SDL_GetError());
+            exit(1);
+        }
+        if (!SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT)) {
+            SDL_Log("SDL_SetRenderDrawColor failed: %s", SDL_GetError());
+            exit(1);
+        }
     }
     // TODO we absolutely need pixel perfect rendering at 1:1 scale, and we absolutely need interpolation at scales <1:1
     // default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect at 1:1
-    // for now just set SDL_SCALEMODE_NEAREST for scale >=1:1
     // not in set_zoom_level() because it's not called when toggling fullscreen
-    if (!SDL_SetTextureScaleMode(state.image_texture, view_rect.w < state.img_w ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST)) {
+    if (!SDL_SetTextureScaleMode(state.image_texture, view_rect.w<state.img_w ? SCALEMODE_LOWER : view_rect.w==state.img_w ? SCALEMODE_EQUAL : SCALEMODE_GREATER)) {
         SDL_Log("SDL_SetTextureScaleMode failed: %s", SDL_GetError());
         exit(1);
     }
