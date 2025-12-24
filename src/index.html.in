@@ -10,7 +10,7 @@
 
     <img src="lightning-image-viewer.svg">
 
-    <p>Lightning Image Viewer is fast and lightweight desktop image viewer featuring minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps. It is free (as in <a href="https://en.wikipedia.org/wiki/Free_and_open-source_software">FOSS</a>, licensed under GPLv3) native (as in native code) cross-platform app (written in C with <a href="https://libsdl.org/">SDL3</a>, tested on Linux and Windows). Detailed description and source code are available on <a href="https://github.com/shatsky/lightning-image-viewer">GitHub</a>. This webpage is primarily demo featuring actual app which is compiled to <a href="https://webassembly.org/">WebAssembly</a> and runs in browser via <a href="https://emscripten.org/">Emscripten</a>. It is launched after image file is selected and renders to canvas, displaying image over webpage content just like native build displays over desktop and handling input events same as native. It should work in all mainstream browsers.</p>
+    <p>Lightning Image Viewer is fast and lightweight desktop image viewer featuring minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps. It is free (as in <a href="https://en.wikipedia.org/wiki/Free_and_open-source_software">FOSS</a>, licensed under GPLv3) native (as in native code) cross-platform app (written in C and Rust with <a href="https://libsdl.org/">SDL3</a> and <a href="https://github.com/image-rs/image">image-rs</a>, tested on Linux and Windows). Detailed description and source code are available on <a href="https://github.com/shatsky/lightning-image-viewer">GitHub</a>. This webpage is primarily demo featuring actual app which is compiled to <a href="https://webassembly.org/">WebAssembly</a> and runs in browser via <a href="https://emscripten.org/">Emscripten</a>. It is launched after image file is selected and renders to canvas, displaying image over webpage content just like native build displays over desktop and handling input events same as native. It should work in all mainstream browsers.</p>
 
     <p>Image file: <input type="file" id="file_input"></p>
 
@@ -25,6 +25,7 @@
       <li>keyboard R/L: rotate 90deg clockwise/counter clockwise</li>
       <li>keyboard M: mirror horizontally</li>
       <li>keyboard PgDn/PgUp: <s>prev/next image</s> app running in browser cannot access local filesystem, so this only resets view of opened image</li>
+      <li>keyboard Space: pause/resume animation playback</li>
     </ul>
 
     <p>Downloads: check <a href="https://github.com/shatsky/lightning-image-viewer/releases">GitHub releases</a></p>
@@ -33,7 +34,7 @@
 
     <p>Known issues specific to this demo webpage:</p>
     <ul>
-      <li>image formats support is limited to formats internally supported by SDL3_image library (BMP, GIF, JPEG, LBM, PCX, PNG, PNM (PPM/PGM/PBM), QOI, TGA, XCF, XPM, and simple SVG format images) (because I didn't bother to build external dependencies needed for AVIF, JPEG-XL, TIFF, and WebP)</li>
+      <li>AVIF and HEIC not supported (because I didn't bother to build libheif)</li>
     </ul>
 
     <p>Special thanks to:</p>
