@@ -73,14 +73,14 @@
 #endif
 
 #define EXIT_EXPL_MSG \
-"Normal behaviour of this app is to exit upon left mouse click (if no movement\n"\
+"Normal behavior of this app is to exit upon left mouse click (if no movement\n"\
 "happened between press and release) or keyboard Enter press. This is a feature\n"\
 "allowing toggling between file manager and image view. However, this instance\n"\
 "of app was launched without file cmdline arg, which happens if app is launched\n"\
 "via app launcher; it is not useful way to use this app, but new users often do\n"\
-"it; new users are also often confused by this exit behaviour; therefore this\n"\
-"message is shown instead on 1st occurence of any of specified input events.\n"\
-"Upon next occurence app will exit.\n"\
+"it; new users are also often confused by this exit behavior; therefore this\n"\
+"message is shown instead on 1st occurrence of any of specified input events.\n"\
+"Upon next occurrence app will exit.\n"\
 "\n"\
 "Please associate app with supported image file types and launch it via opening\n"\
 "image files from file manager to use it as intended."
