@@ -924,8 +924,10 @@ int main(int argc, char** argv)
                 }
                 break;
             case SDL_EVENT_KEY_DOWN:
+                //SDL_Log("key scancode: %d", event.key.scancode);
                 switch(event.key.scancode) {
                     case SDL_SCANCODE_F:
+                    case SDL_SCANCODE_F11:
                         // toggle fullscreen
                         set_win_fullscreen(!state.win_fullscreen);
                         render_window();
@@ -941,6 +943,7 @@ int main(int argc, char** argv)
                         render_window();
                         break;
                     case SDL_SCANCODE_Q:
+                    case SDL_SCANCODE_ESCAPE:
                         // quit
                         exit(0);
                     case SDL_SCANCODE_R:
@@ -949,10 +952,12 @@ int main(int argc, char** argv)
                         render_window();
                         break;
                     case SDL_SCANCODE_0:
+                    case SDL_SCANCODE_KP_0:
                         // zoom 1:1
                         view_zoom_to_level_at_center(0);
                         break;
                     case SDL_SCANCODE_RETURN:
+                    case SDL_SCANCODE_KP_ENTER:
                         // quit
                         if (state.show_exit_expl) {
                             state.show_exit_expl = false;
@@ -960,9 +965,6 @@ int main(int argc, char** argv)
                         } else {
                             exit(0);
                         }
-                    case SDL_SCANCODE_ESCAPE:
-                        // quit
-                        exit(0);
                     case SDL_SCANCODE_SPACE:
                         // toggle animation playback
                         if (!state.anim_paused) {
@@ -973,39 +975,42 @@ int main(int argc, char** argv)
                         state.anim_paused = !state.anim_paused;
                         break;
                     case SDL_SCANCODE_MINUS:
+                    case SDL_SCANCODE_KP_MINUS:
                         // zoom out
                         view_zoom_to_level_at_center(state.view_zoom_level-1);
                         break;
                     case SDL_SCANCODE_EQUALS:
+                    case SDL_SCANCODE_KP_PLUS:
                         // zoom in
                         view_zoom_to_level_at_center(state.view_zoom_level+1);
                         break;
-                    case SDL_SCANCODE_F11:
-                        // toggle fullscreen
-                        set_win_fullscreen(!state.win_fullscreen);
-                        render_window();
-                        break;
                     case SDL_SCANCODE_PAGEUP:
+                    case SDL_SCANCODE_KP_9:
                         // prev
                         load_next_image(true);
                         break;
                     case SDL_SCANCODE_PAGEDOWN:
+                    case SDL_SCANCODE_KP_3:
                         // next
                         load_next_image(false);
                         break;
                     case SDL_SCANCODE_RIGHT:
+                    case SDL_SCANCODE_KP_6:
                         // move right
                         view_move_by_vector(-KEYBOARD_PAN_DELTA, 0);
                         break;
                     case SDL_SCANCODE_LEFT:
+                    case SDL_SCANCODE_KP_4:
                         // move left
                         view_move_by_vector(KEYBOARD_PAN_DELTA, 0);
                         break;
                     case SDL_SCANCODE_DOWN:
+                    case SDL_SCANCODE_KP_2:
                         // move down
                         view_move_by_vector(0, -KEYBOARD_PAN_DELTA);
                         break;
                     case SDL_SCANCODE_UP:
+                    case SDL_SCANCODE_KP_8:
                         // move up
                         view_move_by_vector(0, KEYBOARD_PAN_DELTA);
                         break;
