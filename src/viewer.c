@@ -26,6 +26,7 @@
 #include <limits.h> // INT_MAX
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_mutex.h>
+#include <SDL3/SDL_messagebox.h>
 
 #include "image_rs_ffi.h"
 
@@ -71,6 +72,18 @@
     #define SCALEMODE_GREATER SDL_SCALEMODE_LINEAR
 #endif
 
+#define EXIT_EXPL_MSG \
+"Normal behaviour of this app is to exit upon left mouse click (if no movement\n"\
+"happened between press and release) or keyboard Enter press. This is a feature\n"\
+"allowing toggling between file manager and image view. However, this instance\n"\
+"of app was launched without file cmdline arg, which happens if app is launched\n"\
+"via app launcher; it is not useful way to use this app, but new users often do\n"\
+"it; new users are also often confused by this exit behaviour; therefore this\n"\
+"message is shown instead on 1st occurence of any of specified input events.\n"\
+"Upon next occurence app will exit.\n"\
+"\n"\
+"Please associate app with supported image file types and launch it via opening\n"\
+"image files from file manager to use it as intended."
 
 #ifndef _WIN32
     #define PATH_SEP '/'
@@ -107,6 +120,7 @@ struct Frame {
 struct State {
     // cur_x, _y: coords of current point (under cursor)
     // pre_mv: at start of move (drag) action
+    bool show_exit_expl; // need to show explain msg on left click or Enter instead of exit
     char* file_load_path;
     bool file_load_initial;
     bool file_load_success;
@@ -822,12 +836,14 @@ int main(int argc, char** argv)
                 break;
             }
         }
+        state.show_exit_expl = true;
     } else {
         state.file_load_path = strdup(argv[1]); // free(state.file_load_path): when filelist is filled or new file is opened
         if (state.file_load_path == NULL) {
             SDL_Log("strdup failed");
             exit(1);
         }
+        state.show_exit_expl = false;
     }
     load_image();
     if (!state.file_load_success) {
@@ -892,7 +908,12 @@ int main(int argc, char** argv)
                 switch (event.button.button) {
                     case SDL_BUTTON_LEFT:
                         if (should_exit_on_lmousebtn_release) {
-                            exit(0);
+                            if (state.show_exit_expl) {
+                                state.show_exit_expl = false;
+                                SDL_ShowSimpleMessageBox(0, APP_NAME, EXIT_EXPL_MSG, state.window);
+                            } else {
+                                exit(0);
+                            }
                         }
                         lmousebtn_pressed = false;
                         break;
@@ -933,7 +954,12 @@ int main(int argc, char** argv)
                         break;
                     case SDL_SCANCODE_RETURN:
                         // quit
-                        exit(0);
+                        if (state.show_exit_expl) {
+                            state.show_exit_expl = false;
+                            SDL_ShowSimpleMessageBox(0, APP_NAME, EXIT_EXPL_MSG, state.window);
+                        } else {
+                            exit(0);
+                        }
                     case SDL_SCANCODE_ESCAPE:
                         // quit
                         exit(0);
