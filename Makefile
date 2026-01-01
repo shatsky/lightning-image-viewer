@@ -7,6 +7,7 @@ all:
 	$(CC) $(CFLAGS) -o lightning-image-viewer src/viewer.c target/release/libimage_rs_ffi.a $(LDFLAGS)
 
 clean:
+	cargo clean
 	rm -f lightning-image-viewer
 
 install:
