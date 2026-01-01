@@ -1,5 +1,5 @@
 # cargo libheif-sys uses pkg-config to find libheif
-{ rustPlatform, stdenv, sdl3, libheif, cargo, pkg-config }:
+{ rustPlatform, sdl3, libheif, cargo, pkg-config }:
 
 rustPlatform.buildRustPackage {
   name = "lightning-image-viewer";
