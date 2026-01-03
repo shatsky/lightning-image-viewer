@@ -11,9 +11,7 @@
       let pkgs = nixpkgs.legacyPackages.${system}; in
       {
         packages = rec {
-          lightning-image-viewer = (pkgs.callPackage ./derivation.nix {}).overrideAttrs {
-            src = self.outPath; # fetchGit is not allowed in pure nix mode
-          };
+          lightning-image-viewer = pkgs.callPackage ./derivation.nix {};
           default = lightning-image-viewer;
         };
       }
