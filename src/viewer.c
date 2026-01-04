@@ -321,21 +321,36 @@ void render_window() {
         view_rect.x = (state.win_w - view_rect.w) / 2;
         view_rect.y = (state.win_h - view_rect.h) / 2;
     } else {
+        // draw shadow and image bg
+        // SDL_RenderTextureRotated needs non rotated rect but SDL_RenderFillRect needs rotated; rotate and reset to non rotated after
+        float tmp;
         view_rect = state.view_rect;
-        // draw shadow and clear image bg
-        SDL_FRect shadow_rect = {
-            .x = view_rect.x - FRAME_WIDTH_LEFT,
-            .y = view_rect.y - FRAME_WIDTH_TOP,
-            .w = view_rect.w + FRAME_WIDTH_LEFT + FRAME_WIDTH_RIGHT,
-            .h = view_rect.h + FRAME_WIDTH_TOP + FRAME_WIDTH_BOTTOM
-        };
+        if (state.view_rotate_angle_q%2) {
+            view_rect.x += (view_rect.w - view_rect.h) / 2;
+            view_rect.y += (view_rect.h - view_rect.w) / 2;
+            tmp = view_rect.w;
+            view_rect.w = view_rect.h;
+            view_rect.h = tmp;
+        }
+        view_rect.x -= FRAME_WIDTH_LEFT;
+        view_rect.y -= FRAME_WIDTH_TOP;
+        view_rect.w += FRAME_WIDTH_LEFT + FRAME_WIDTH_RIGHT;
+        view_rect.h += FRAME_WIDTH_TOP + FRAME_WIDTH_BOTTOM;
         if (!SDL_SetRenderDrawColor(state.renderer, FRAME_COLOR)) {
             SDL_Log("SDL_SetRenderDrawColor failed: %s", SDL_GetError());
             exit(1);
         }
-        if (!SDL_RenderFillRect(state.renderer, &shadow_rect)) {
+        if (!SDL_RenderFillRect(state.renderer, &view_rect)) {
             SDL_Log("SDL_RenderFillRect failed: %s", SDL_GetError());
             exit(1);
+        }
+        view_rect = state.view_rect;
+        if (state.view_rotate_angle_q%2) {
+            view_rect.x += (view_rect.w - view_rect.h) / 2;
+            view_rect.y += (view_rect.h - view_rect.w) / 2;
+            tmp = view_rect.w;
+            view_rect.w = view_rect.h;
+            view_rect.h = tmp;
         }
         if (!SDL_SetRenderDrawColor(state.renderer, IMAGE_BACKGROUND_COLOR)) {
             SDL_Log("SDL_SetRenderDrawColor failed: %s", SDL_GetError());
@@ -349,6 +364,7 @@ void render_window() {
             SDL_Log("SDL_SetRenderDrawColor failed: %s", SDL_GetError());
             exit(1);
         }
+        view_rect = state.view_rect;
     }
     // TODO we absolutely need pixel perfect rendering at 1:1 scale, and we absolutely need interpolation at scales <1:1
     // default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect at 1:1
