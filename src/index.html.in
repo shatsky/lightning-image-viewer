@@ -12,7 +12,7 @@
 
     <p>Lightning Image Viewer is fast and lightweight desktop image viewer featuring minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps. It is free (as in <a href="https://en.wikipedia.org/wiki/Free_and_open-source_software">FOSS</a>, licensed under GPLv3) native (as in native code) cross-platform app (written in C and Rust with <a href="https://libsdl.org/">SDL3</a> and <a href="https://github.com/image-rs/image">image-rs</a>, tested on Linux and Windows). Detailed description and source code are available on <a href="https://github.com/shatsky/lightning-image-viewer">GitHub</a>. This webpage is primarily demo featuring actual app which is compiled to <a href="https://webassembly.org/">WebAssembly</a> and runs in browser via <a href="https://emscripten.org/">Emscripten</a>. It is launched after image file is selected and renders to canvas, displaying image over webpage content just like native build displays over desktop and handling input events same as native. It should work in all mainstream browsers.</p>
 
-    <p>Image file: <input type="file" id="file_input"></p>
+    <p>Image file: <input type="file" id="file_input" disabled> <span>(waiting for runtime to start...)</span></p>
 
     <p>Controls:</p>
     <ul>
@@ -28,18 +28,19 @@
       <li>keyboard Space: pause/resume animation playback</li>
     </ul>
 
-    <p>Downloads: check <a href="https://github.com/shatsky/lightning-image-viewer/releases">GitHub releases</a></p>
+    <p>Downloads: check <a href="https://github.com/shatsky/lightning-image-viewer/releases">GitHub releases</a>; Windows binaries are also published in <a href="https://apps.microsoft.com/detail/9np4j8k90smk">Microsoft Store</a></p>
 
     <p>Feedback: check <a href="https://github.com/shatsky/lightning-image-viewer/issues">GitHub issues</a></p>
 
     <p>Known issues specific to this demo webpage:</p>
     <ul>
-      <li>AVIF and HEIC not supported (because I didn't bother to build libheif)</li>
+      <li>AVIF and HEIC are not supported (because I didn't bother to build libheif)</li>
+      <li>JXL is broken (probably because jxl-oxide uses rayon which tries to start threads and I didn't bother to enable threads or disable rayon); attempt to load can leave runtime in broken state until full page reload</li>
     </ul>
 
     <p>Special thanks to:</p>
     <ul>
-      <li>JYKITORS, for constantly supplying me with free (as in beer, not as in speech) delicious sushi (not as in Sushi file previewer for GNOME/Nautilus; by the way, this viewer can be used like Sushi/QuickLook, toggling (pre)view with Enter key, given that your file manager is configured to open images with it upon Enter key press; or with any other key, if you can configure your file manager accordingly and build the viewer with patched source to bind the key to exit action; check the event loop in <code>main()</code>)</li>
+      <li>JYKITORS, for constantly supplying me with free (as in beer, not as in speech) delicious sushi (not as in Sushi file previewer for GNOME/Nautilus; by the way, this viewer can be used like Sushi/QuickLook, toggling (pre)view with left mouse button or Enter key)</li>
       <li>ChatGPT (in case it does have consciousness after all), for its time-saving advice, and all humans who created knowledge which it was trained on</li>
       <li>all conscious humans who don't copypaste valuable lossy-compressed images as pixmaps (which causes loss of compression and addition of new compression artifacts upon repeated lossy compression) but share them as files</li>
     </ul>
@@ -70,6 +71,11 @@
         noInitialRun: true,
         onExit: function(status) {
           location.reload();
+        },
+        onRuntimeInitialized: function() {
+          var input = document.getElementById('file_input');
+          input.nextElementSibling.style.display = 'none';
+          input.disabled = false;
         }
       };
 
