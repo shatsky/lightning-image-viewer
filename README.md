@@ -2,7 +2,7 @@
 
 ![Screenshot](https://github.com/user-attachments/assets/eec3a227-2afb-4249-ae61-b0775d228884)
 
-Fast and lightweight desktop image (pre)viewer featuring minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps. In other words, there are no window frame, menus or toolbars which would require extra movements to manipulate the view; it displays just the image itself over underlying windows, allowing to pan (drag it around entire display) by moving mouse with left button pressed, zoom into detail under cursor with scroll and close with left click or Enter (allowing quick toggle between file manager and image view). Image rectangle feels like window, but its size and position are changed upon pan and zoom without messing with window controls and without anything but display borders limiting visible image surface, and underlying windows are visible outside of it, preserving "contextual continuity". Full controls description is in "Usage" section.
+Fast and lightweight desktop image (pre)viewer featuring unusual minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps. In other words, there are no window frame, menus or toolbars which would require extra movements to manipulate the view; it displays just the image itself over underlying windows, allowing to pan (drag it around entire display) by moving mouse with left button pressed, zoom into detail under cursor with scroll and close with left click or Enter (allowing quick toggle between file manager and image view). Image rectangle feels like window, but its size and position are changed upon pan and zoom without messing with window controls and without anything but display borders limiting visible image surface, and underlying windows are visible outside of it, preserving "contextual continuity". Full controls description is in "Usage" section.
 
 Implemented in C and Rust with SDL3 and image-rs. It does not currently do any complicated tricks to load images faster, but it's significantly faster than "common" desktop image viewers; just because it's small bloat-free native (as in "native code") app. Image loading speed should be on par with other lightweight viewers like feh; but "Lightning" in its name refers primarily to its UX, which allows to randomly open/close images from file manager and zoom/pan into details almost instantly, and also to something which inspired me to create it. You will probably like it if you have lots of downloaded images and photos from gadgets in your desktop computer, prefer to organize/browse them with generic file manager, like to look into details (set view to make certain object of composition fill your field of view, especially relevant for art) and you've got feeling that it's more comfortable to view images in the Internet with some webapp embedded viewers than local ones with local apps.
 
@@ -16,7 +16,7 @@ Image formats: all formats supported by image-rs enabled by default: AVIF, BMP, 
 
 Note: some image formats, esp. newest ones based on modern video codecs keyframes (AVIF, HEIC) are very complex and it's likely that not all possible variants are supported; also TGA decoding seems to fail for unknown reason
 
-Licensed under GPLv3. Originally published at https://github.com/shatsky/lightning-image-viewer
+Licensed under GPLv3+. Originally published at https://github.com/shatsky/lightning-image-viewer
 
 ## Building and installing
 
