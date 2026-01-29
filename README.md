@@ -1,26 +1,20 @@
 # Lightning Image Viewer
 
-Fast and lightweight desktop image viewer featuring minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps, implemented in C and Rust with SDL3 and image-rs; pan/zoom/fullscreen controls basically replicate controls of leaflet.js which powers most web maps (but zoom and keyboard pan are 2x more granular) and Firefox&Chrome browsers. More detailed description:
-- maximized transparent borderless window (creating illusion that visible image rectangle is the window, but its size and position is changed upon pan and zoom without messing with window controls)
-- zoom with mouse wheel up/down (in/out) or keyboard =/-/0 (in/out/1:1); zoom is discrete with geometric series of scales with multiplier of 2^(1/2) incl. 1:1; mouse zoom preserves image point currently under mouse cursor; keyboard zoom preserves image point currently in the center of the window/screen; upon loading image it is scaled to largest scale in the series in which it fits in window/screen
-- pan with left mouse button pressed or with keyboard Up/Down/Left/Right; keyboard pan delta is 40px and, like in map apps, it's "move the camera, not the object", i. e. image is moved in direction opposite to pressed key; upon loading image it is centered
-- close with left mouse button click (if no pan nor zoom were performed between button press and release events), keyboard Q, Esc or Enter (latter can be counter habitual since some popular viewers use it for fullscreen, but I find it convenient to open and close with same key)
-- toggle fullscreen with middle mouse button click or keyboard F or F11; in fullscreen image is scaled to fit to screen, background is black; pan and zoom in fullscreen also switch to non-fullscreen, proceeding from last non-fullscreen view state (but with rotation and mirroring state changes applied in fullscreen)
-- switch to next/previous file in directory with keyboard PgDn/PgUp (sorted by file modification time descending)
-- rotate clockwise/counter clockwise with keyboard R/L, mirror (horizontally) with M; changes are NOT saved, app has no code for writing to opened files (I hate viewers overwriting my files when I'm not asking for it)
-- toggle animation pause/playback with keyboard Space
+![Screenshot](https://github.com/user-attachments/assets/eec3a227-2afb-4249-ae61-b0775d228884)
 
-You can see screenshot in [Microsoft Store](https://apps.microsoft.com/detail/9np4j8k90smk) or try the app right in browser at https://shatsky.github.io/lightning-image-viewer/ (no, it has nothing "web" itself, but it can be compiled to WebAssembly and run in browser using Emscripten and its backend in SDL3; natively built app is as "purely native" as it goes with SDL3 native backend providing thin abstraction layer over platform's graphics and input subsystems).
+Fast and lightweight desktop image (pre)viewer featuring minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps. In other words, there are no window frame, menus or toolbars which would require extra movements to manipulate the view; it displays just the image itself over underlying windows, allowing to pan (drag it around entire display) by moving mouse with left button pressed, zoom into detail under cursor with scroll and close with left click or Enter (allowing quick toggle between file manager and image view). Image rectangle feels like window, but its size and position are changed upon pan and zoom without messing with window controls and without anything but display borders limiting visible image surface, and underlying windows are visible outside of it, preserving "contextual continuity". Full controls description is in "Usage" section.
 
-I created it because I like image viewing UX available on certain websites where image is displayed in floating overlay container which can be panned and zoomed like a map and closed with a click on it; I find it very convenient for selective switching between images and looking into their details, and wanted to have it when looking through my local image collections using desktop file manager with mouse and keyboard. Existing image viewers which I know of felt slow to open image from file manager and/or uncomfortable to manipulate its display, to the point that to look through some memorable photos which I have on local storage I would rather go to website on which they are published.
+Implemented in C and Rust with SDL3 and image-rs. It does not currently do any complicated tricks to load images faster, but it's significantly faster than "common" desktop image viewers; just because it's small bloat-free native (as in "native code") app. Image loading speed should be on par with other lightweight viewers like feh; but "Lightning" in its name refers primarily to its UX, which allows to randomly open/close images from file manager and zoom/pan into details almost instantly, and also to something which inspired me to create it. You will probably like it if you have lots of downloaded images and photos from gadgets in your desktop computer, prefer to organize/browse them with generic file manager, like to look into details (set view to make certain object of composition fill your field of view, especially relevant for art) and you've got feeling that it's more comfortable to view images in the Internet with some webapp embedded viewers than local ones with local apps.
 
-Currently target platforms are Linux (Wayland, X11) and Windows, but it should be possible to make it work on any POSIX-compatible platform supported by SDL3 with minimal effort.
+If screenshot and description above are not enough, you can try the app right in browser at https://shatsky.github.io/lightning-image-viewer/ (no, it's NOT a webapp, but it can be compiled to WebAssembly and run in common browsers, rendering to canvas via SDL3 backend).
 
-Supported image formats: all formats supported by image-rs enabled by default: AVIF, BMP, DDS, EXR, FF, GIF, HDR, ICO, JPEG, PNG, PNM, QOI, ~~TGA~~, TIFF, WEBP (w/ animation support for GIF, PNG aka APNG and WEBP; w/ orientation metadata support incl. EXIF; see https://docs.rs/image/latest/image/codecs/index.html#supported-formats ); JXL (via jxl-oxide) and HEIC (via libheif-rs).
-
-Note: some image formats, esp. newest ones based on modern video codecs keyframes (AVIF, HEIC) are very complex and it's likely that not all possible variants are supported; also TGA decoding seems to fail for unknown reason.
+Platforms: currently targeting Linux (Wayland, X11) and Windows, but it should be possible to make it work on any POSIX-compatible platform supported by SDL3 with minimal effort.
 
 Note: on Linux Wayland with XWayland SDL3 currently falls back on X11 backend if Wayland compositor lacks support for fifo-v1 protocol (important for games performance, seems to be supported by all major compositors now). This can be overridden via `SDL_VIDEO_DRIVER=wayland` env var
+
+Image formats: all formats supported by image-rs enabled by default: AVIF, BMP, DDS, EXR, FF, GIF, HDR, ICO, JPEG, PNG, PNM, QOI, ~~TGA~~, TIFF, WEBP (w/ animation support for GIF, PNG aka APNG and WEBP; w/ orientation metadata support incl. EXIF; see https://docs.rs/image/latest/image/codecs/index.html#supported-formats ); JXL (via jxl-oxide) and HEIC (via libheif-rs).
+
+Note: some image formats, esp. newest ones based on modern video codecs keyframes (AVIF, HEIC) are very complex and it's likely that not all possible variants are supported; also TGA decoding seems to fail for unknown reason
 
 Licensed under GPLv3. Originally published at https://github.com/shatsky/lightning-image-viewer
 
@@ -35,7 +29,7 @@ You can use Nix expression to build&install with Nix or use the Makefile (deps: 
 
 See GitHub releases page for pre-built Windows binaries and Ubuntu packages or, in case you want to build them yourself, build steps in the workflow in .github/workflows/ which is used to build them.
 
-Windows binaries are also published in [Microsoft Store](https://apps.microsoft.com/detail/9np4j8k90smk) .
+Windows binaries are also published in [Microsoft Store](https://apps.microsoft.com/detail/9np4j8k90smk) ; it's recommended for Windows users to get the app from there, because it allows to manage file types associations conveniently; Windows Settings -> Apps -> Default Apps -> Lightning Image Viewer page lists file types supported by app.
 
 Note: release artifacts are built with build provenance attestation, allowing to verify that they are built via GitHub Actions workflow on GitHub CI/CD from original source. Attestations are available at https://github.com/shatsky/lightning-image-viewer/attestations (direct link to attestation for specific release should be provided in release notes), verification is as simple (if you trust GitHub to verify its signatures for you) as comparing SHA-256 hash of downloaded file with one listed in attestation.
 
@@ -43,14 +37,24 @@ Note: Windows binary should work properly on Windows 10 version 1903 (May 2019 u
 
 Note: Ubuntu package is built on/for Ubuntu 25.04 (1st Ubuntu release with SDL3)
 
-Note: on Windows, installing from Microsoft Store allows to manage file types associations conveniently; Settings -> Apps -> Default Apps -> Lightning Image Viewer page lists file types supported by app
-
 ## Usage
 
 `lightning-image-viewer [file]` opens file, `lightning-image-viewer` without args displays file selection dialog.
 
-## Roadmap
+Controls:
+- zoom: mouse scroll (into detail under cursor) or keyboard +=/-/0 (into detail in center of display, if left mouse button is not pressed, otherwise into detail under cursor, 0 for 1:1); zoom is discrete with geometric series of scales with multiplier of 2^(1/2) incl. 1:1; initially image is scaled to the largest scale in the series in which it fits in window/screen
+- pan: mouse move with left button pressed or keyboard arrows; keyboard pan delta is 40px and, like in map apps, it's "move the camera, not the object", i. e. image is moved in direction opposite to pressed key; initially image is centered
+- close: left mouse button click (if no action happened between press and release events), keyboard Enter (allowing "quick toggle" between file manager and image view by pressing same button/key repeatedly), Q or Esc
+- toggle fullscreen: middle mouse button click or keyboard F or F11; in fullscreen image is scaled to fit to screen, background is black; it's not pannable/zoomable, pan and zoom in fullscreen switch back to non-fullscreen, proceeding from last non-fullscreen view state (but rotation and mirroring state changes applied in fullscreen persist)
+- toggle animation pause/playback: keyboard Space
+- switch next/previous file in directory: keyboard PgDn/PgUp (sorted by file modification time descending)
+- rotate and mirror: keyboard R/L (rotate 90 degrees clockwise/counter clockwise), M (mirror horizontally); changes are NOT saved, app has NO code for writing to files (I hate viewers overwriting my files when I'm not asking for it); initially image is rotated and mirrored as per EXIF and other supported metadata
 
+Note: pan/zoom/fullscreen controls basically replicate controls of leaflet.js which powers most web maps (but zoom and keyboard pan are 2x more granular) and Firefox&Chrome browsers
+
+## Development
+
+Roadmap:
 - fix issue which occurs in GNOME and possibly other graphical environments which have shell UI in top left display corner and place invisible window at top left corner of "usable area", causing shift of visible image rectangle from intended position which is calculated with assumption that window is placed at top left display corner
 - sane limits for pan and zoom
 - display ahead of load (decode) completion (1st frame of animation, partial frame decoding, embedded thumbnail, external thumbnail used by file manager)
@@ -65,6 +69,12 @@ Note: on Windows, installing from Microsoft Store allows to manage file types as
 - (maybe) touch input support (SDL3 support for it seems not mature yet, most desktop environments translate it into mouse events for compatibility anyway), smooth transitions, continuous zoom
 - (maybe) vector graphics (SVG) support
 - (maybe) rewrite remaining parts in Rust
+
+Non-goals:
+- support lots of rare formats; the point of project is to satisfy usecase of viewing collections of downloaded images and photos from gadgets, which means primarily popular image publishing formats; it can possibly be extended to support formats needed by CG artists and photographers using popular professional software and hardware
+- support high configurability which would allow to get totally different UX; the point of the project is to provide concrete UX which I find most convenient, with limited configurability to capture its "close neighborhood" in "UX space" to make it best viewer for specific group of users which prefer this or similar UX
+
+Development notes: https://shatsky.github.io/notes/2025-03-07_sdl3-image-viewer.html
 
 ## Credits
 
