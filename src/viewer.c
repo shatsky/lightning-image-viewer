@@ -72,6 +72,23 @@
     #define SCALEMODE_GREATER SDL_SCALEMODE_LINEAR
 #endif
 
+#define CONTEXT_MENU_MSG \
+"Context menu is not implemented. Controls:\n"\
+"- zoom with scroll or keyboard +=/-/0\n"\
+"- pan with left mouse button pressed or keyboard arrows\n"\
+"- toggle fullscreen with middle click or F/F11\n"\
+"- toggle animation playback with Space\n"\
+"- rotate with R/L, mirror with M\n"\
+"- switch prev/next with PgUp/PgDn\n"\
+"- close with left click or Enter/Esc/Q\n"\
+"\n"\
+"Full controls description is in README.\n"\
+"\n"\
+"Lightning Image Viewer (ɔ) Eugene Shatsky 2021-2026\n"\
+"\n"\
+"Licensed under GPLv3+. Originally published at\n"\
+"https://github.com/shatsky/lightning-image-viewer"
+
 #define EXIT_EXPL_MSG \
 "Normal behavior of this app is to exit upon left mouse click (if no movement\n"\
 "happened between press and release) or keyboard Enter press. This is a feature\n"\
@@ -917,6 +934,9 @@ int main(int argc, char** argv)
                         SDL_GetMouseState(&state.win_cur_x, &state.win_cur_y);
                         save_pre_mv_coords();
                         should_exit_on_lmousebtn_release = true;
+                        break;
+                    case SDL_BUTTON_RIGHT:
+                        SDL_ShowSimpleMessageBox(0, APP_NAME, CONTEXT_MENU_MSG, state.window);
                         break;
                 }
                 break;
