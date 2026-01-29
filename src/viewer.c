@@ -970,7 +970,12 @@ int main(int argc, char** argv)
                     case SDL_SCANCODE_0:
                     case SDL_SCANCODE_KP_0:
                         // zoom 1:1
-                        view_zoom_to_level_at_center(0);
+                        if (lmousebtn_pressed) {
+                            should_exit_on_lmousebtn_release = false;
+                            view_zoom_to_level_at_cursor(0);
+                        } else {
+                            view_zoom_to_level_at_center(0);
+                        }
                         break;
                     case SDL_SCANCODE_RETURN:
                     case SDL_SCANCODE_KP_ENTER:
@@ -993,12 +998,22 @@ int main(int argc, char** argv)
                     case SDL_SCANCODE_MINUS:
                     case SDL_SCANCODE_KP_MINUS:
                         // zoom out
-                        view_zoom_to_level_at_center(state.view_zoom_level-1);
+                        if (lmousebtn_pressed) {
+                            should_exit_on_lmousebtn_release = false;
+                            view_zoom_to_level_at_cursor(state.view_zoom_level-1);
+                        } else {
+                            view_zoom_to_level_at_center(state.view_zoom_level-1);
+                        }
                         break;
                     case SDL_SCANCODE_EQUALS:
                     case SDL_SCANCODE_KP_PLUS:
                         // zoom in
-                        view_zoom_to_level_at_center(state.view_zoom_level+1);
+                        if (lmousebtn_pressed) {
+                            should_exit_on_lmousebtn_release = false;
+                            view_zoom_to_level_at_cursor(state.view_zoom_level+1);
+                        } else {
+                            view_zoom_to_level_at_center(state.view_zoom_level+1);
+                        }
                         break;
                     case SDL_SCANCODE_PAGEUP:
                     case SDL_SCANCODE_KP_9:
