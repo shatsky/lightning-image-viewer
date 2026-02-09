@@ -71,7 +71,6 @@ jobs:
           cd lightning-image-viewer
           # TODO dynamically discover and set libheif version?
           cargo build --release --no-default-features --features libheif-v1_19
-          cc -o lightning-image-viewer src/viewer.c target/release/libimage_rs_ffi.a -lm -lSDL3 -lheif
           make DESTDIR=../lightning-image-viewer_${TAG_NAME_V}_amd64 PREFIX=/usr install
           cd ..
           cp -a README.md lightning-image-viewer_${TAG_NAME_V}_amd64/usr/share/doc/lightning-image-viewer
@@ -152,7 +151,7 @@ jobs:
       - name: step-build-windows-build
         run: |
           magick -background none -density 256x256 lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg -define icon:auto-resize lightning-image-viewer.ico
-          x86_64-w64-mingw32-windres lightning-image-viewer/src/viewer.rc icon.o
+          x86_64-w64-mingw32-windres lightning-image-viewer/src/windows_resources.rc windows_resources.o
           rustup target add x86_64-pc-windows-gnu
           cd lightning-image-viewer
           # create script which cargo can run instead of pkg-config to discover previously built libheif
@@ -177,10 +176,7 @@ jobs:
           exit 1
           EOF
           chmod a+x ../pkg-config-libheif
-          env PKG_CONFIG=$PWD/../pkg-config-libheif PKG_CONFIG_ALLOW_CROSS=1 cargo build --target x86_64-pc-windows-gnu --release
-          cd ..
-          # `-lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -lkernel32` for cargo-built objects, are they all needed?
-          x86_64-w64-mingw32-gcc lightning-image-viewer/src/viewer.c lightning-image-viewer/target/x86_64-pc-windows-gnu/release/libimage_rs_ffi.a icon.o -ISDL3-$SDL_VER/x86_64-w64-mingw32/include -Ilibheif-$LIBHEIF_VER/libheif/api -LSDL3-$SDL_VER/x86_64-w64-mingw32/lib -Llibheif-$LIBHEIF_VER/build/libheif -l:libSDL3.dll.a -l:libheif.dll.a -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -lkernel32 -mwindows -o lightning-image-viewer.exe
+          env PKG_CONFIG=$PWD/../pkg-config-libheif PKG_CONFIG_ALLOW_CROSS=1 RUSTFLAGS="-C link-arg=-L../SDL3-$SDL_VER/x86_64-w64-mingw32/lib -C link-arg=-L../libheif-$LIBHEIF_VER/build/libheif -C link-arg=../windows_resources.o" cargo build --target x86_64-pc-windows-gnu --release
 
       - name: step-build-windows-create-archive
         run: |
@@ -224,11 +220,11 @@ jobs:
           mkdir -p pages
           rustup target add wasm32-unknown-emscripten
           cd lightning-image-viewer
-          cargo build --target wasm32-unknown-emscripten --release --no-default-features
-          cd ..
-          emcc -ISDL3-$SDL_VER/include -LSDL3-$SDL_VER/build.emscripten -lSDL3 -sEXPORTED_RUNTIME_METHODS="['callMain']" -sASYNCIFY -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH lightning-image-viewer/src/viewer.c lightning-image-viewer/target/wasm32-unknown-emscripten/release/libimage_rs_ffi.a -o pages/lightning-image-viewer.js
-          cp -a lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg pages
-          sed "s?{{ GITHUB_SHA }}?$GITHUB_SHA?g;s?{{ TAG_NAME }}?v$TAG_NAME_V?g" lightning-image-viewer/src/index.html.in > pages/index.html
+          # TODO `emcc: warning: ASYNCIFY=1 is not compatible with -fwasm-exceptions. Parts of the program that mix ASYNCIFY and exceptions will not compile. [-Wemcc]`
+          # this was only emitted once when it failed because of irrelevant problem, does it mean there are no such parts and everything is ok?
+          env EMCC_CFLAGS="-I../SDL3-$SDL_VER/include -L../SDL3-$SDL_VER/build.emscripten -lSDL3 -sEXPORTED_RUNTIME_METHODS=['callMain'] -sASYNCIFY -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH" cargo build --target wasm32-unknown-emscripten --release --no-default-features
+          cp -a target/wasm32-unknown-emscripten/release/lightning-image-viewer.js target/wasm32-unknown-emscripten/release/lightning_image_viewer.wasm share/icons/hicolor/scalable/apps/lightning-image-viewer.svg ../pages
+          sed "s?{{ GITHUB_SHA }}?$GITHUB_SHA?g;s?{{ TAG_NAME }}?v$TAG_NAME_V?g" src/index.html.in > ../pages/index.html
 
       - name: step-provenance-attestations
         uses: actions/attest-build-provenance@v2

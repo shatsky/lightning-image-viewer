@@ -1,13 +1,10 @@
 [package]
-name = "image-rs-ffi"
+name = "lightning-image-viewer"
 version = "0.1.0"
 edition = "2024"
 
-[lib]
-path = "src/image_rs_ffi.rs"
-crate-type = ["staticlib"]
-
 [dependencies]
+sdl3-sys = "0.6.0"
 image = "0.25.9"
 jxl-oxide = { version = "0.12.5", features = ["image"] }
 # libheif-rs is optional to allow building without libheif

@@ -2,9 +2,9 @@
 
 ![Screenshot](https://github.com/user-attachments/assets/eec3a227-2afb-4249-ae61-b0775d228884)
 
-Fast and lightweight desktop image (pre)viewer featuring unusual minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps. In other words, there are no window frame, menus or toolbars which would require extra movements to manipulate the view; it displays just the image itself over underlying windows, allowing to pan (move) by moving mouse with left button pressed or keyboard arrows, zoom with scroll or keyboard +=/-/0 (into detail under cursor or in center) and close with left click or Enter (allowing quick toggle between file manager and image view). Image rectangle feels like window, but its size and position are changed upon pan and zoom without messing with window controls, so that nothing but display borders limits visible image surface, and underlying windows are visible outside of it, preserving "contextual continuity". Full controls description is in "Usage" section.
+Fast and lightweight desktop image (pre)viewer featuring unusual minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps. In other words, there are no window frame, menus or toolbars which would require extra movements to manipulate the view; it displays just the image itself over underlying windows, allowing to pan (move) by moving mouse with left button pressed or keyboard arrows, zoom with scroll or keyboard +=/-/0 (into detail under cursor or in center) and close with left click or Enter (allowing quick toggle between file manager and image view). Image rectangle feels like window, but its size and position are changed upon pan and zoom without messing with window controls, so that nothing but display borders limits visible image surface, and underlying windows are visible outside of it, preserving "contextual continuity". Detailed controls description is in "Usage" section.
 
-Implemented in C and Rust with SDL3 and image-rs. It does not currently do any complicated tricks to display images faster, but it's significantly faster than "common" desktop image viewers; just because it's small bloat-free native (as in "native code") app. Image loading speed should be on par with other lightweight viewers like feh; but "Lightning" in its name refers primarily to its UX, which allows to randomly open/close images from file manager and zoom/pan into details almost instantly (and also to something which inspired me to create it). You will probably like it if you have lots of downloaded images and photos from gadgets in your desktop computer, prefer to organize/browse them with generic file manager, like to look into details (set view to make certain object of composition fill your field of view, especially relevant for art) and you've got feeling that it's more comfortable to view images online with some webapp embedded viewers than local ones with local apps.
+Implemented in ~~C and~~ Rust with SDL3 and image-rs. It does not currently do any complicated tricks to display images faster, but it's significantly faster than "common" desktop image viewers; just because it's small bloat-free native (as in "native code") app. Image loading speed should be on par with other lightweight viewers like feh; but "Lightning" in its name refers primarily to its UX, which allows to randomly open/close images from file manager and zoom/pan into details almost instantly (and also to something which inspired me to create it). You will probably like it if you have lots of downloaded images and photos from gadgets in your desktop computer, prefer to organize/browse them with generic file manager, like to look into details (set view to make certain object of composition fill your field of view, especially relevant for art) and you've got feeling that it's more comfortable to view images online with some webapp embedded viewers than local ones with local apps.
 
 If screenshot and description above are not enough, you can try the app right in browser at https://shatsky.github.io/lightning-image-viewer/ (no, it's NOT a webapp, but it can be compiled to WebAssembly and run in common browsers, rendering to canvas via SDL3 backend).
 
@@ -22,7 +22,7 @@ You can use Nix expression to build&install with Nix or use the Makefile (deps: 
 - into user profile from release snapshot: `nix-env -i -f https://github.com/shatsky/lightning-image-viewer/archive/refs/tags/{release_tag}.tar.gz` (check https://github.com/shatsky/lightning-image-viewer/releases/latest for latest release tag/snapshot URI)
 - into user profile from development snapshot (most recent commit on main branch): `nix-env -i -f https://github.com/shatsky/lightning-image-viewer/archive/refs/heads/main.zip`
 - into user profile from locally cloned repo: `nix-env -i -f .`
-- just produce `lightning-image-viewer` binary in repo dir (useful during development): `nix-shell` and then `make`
+- just produce `target/release/lightning-image-viewer` binary in repo dir (useful during development): `nix-shell` and then `make`
 - there's also Nix flake, but I don't care much about it for now, though I make sure to test it too with `nix --extra-experimental-features 'nix-command flakes' run .`
 
 See GitHub releases page for pre-built Windows binaries and Ubuntu packages or, in case you want to build them yourself, build steps in the workflow in .github/workflows/ which is used to build them.
@@ -65,10 +65,9 @@ Roadmap:
 - some reasonable runtime configurability
 - ICC profile support (and other metadata which should affect resulting pixels)
 - test suite covering non trivial variants of supported image formats (currently tested on trivial image set generated with imagemagick)
-- (maybe) video playback (ffmpeg? libvlc? gstreamer?)
+- (maybe) video playback (ffmpeg? libmpv? gstreamer?)
 - (maybe) touch input support (SDL3 support for it seems not mature yet, most desktop environments translate it into mouse events for compatibility anyway), smooth transitions, continuous zoom
 - (maybe) vector graphics (SVG) support
-- (maybe) rewrite remaining parts in Rust
 
 Non-goals:
 - support lots of rare formats; the point of project is to satisfy usecase of viewing collections of downloaded images and photos from gadgets, which means primarily popular image publishing formats; it can possibly be extended to support formats needed by CG artists and photographers using popular professional software and hardware

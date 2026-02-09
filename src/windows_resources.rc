@@ -1,0 +1,4 @@
+// Microsoft Windows Resource Compiler resource-definition script file
+
+// for ICON nameID can be anything and its value doesn't matter if there's no need to access it from code
+1 ICON "lightning-image-viewer.ico"
