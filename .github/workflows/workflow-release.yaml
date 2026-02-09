@@ -151,7 +151,7 @@ jobs:
       - name: step-build-windows-build
         run: |
           magick -background none -density 256x256 lightning-image-viewer/share/icons/hicolor/scalable/apps/lightning-image-viewer.svg -define icon:auto-resize lightning-image-viewer.ico
-          x86_64-w64-mingw32-windres lightning-image-viewer/src/windows_resources.rc windows_resources.o
+          echo "1 ICON \"lightning-image-viewer.ico\"" | x86_64-w64-mingw32-windres -o windows_resources.o
           rustup target add x86_64-pc-windows-gnu
           cd lightning-image-viewer
           # create script which cargo can run instead of pkg-config to discover previously built libheif
