@@ -22,6 +22,7 @@ const FRAME_WIDTH_LEFT: i32 = 6;
 const FRAME_COLOR: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 38);
 // non fullscreen
 const IMAGE_BACKGROUND_COLOR: (u8, u8, u8, u8) = (0xff, 0xff, 0xff, 0xff);
+const SCALEMODE: SDL_ScaleMode = SDL_SCALEMODE_LINEAR;
 
 static CONTEXT_MENU_MSG: &std::ffi::CStr =
 c"Context menu is not implemented. Controls summary:\n\
@@ -121,6 +122,7 @@ struct State {
     view_rect: SDL_FRect,
     view_zoom_level: i32, // 0 is for 1:1
     view_zoom_scale: f32,
+    view_zoom_scalemode: SDL_ScaleMode,
     view_rect_pre_mv_x: f32,
     view_rect_pre_mv_y: f32,
     // init: initial after loading image/resetting view
@@ -172,6 +174,11 @@ fn new_state() -> State {
         unsafe{SDL_Log(c"SDL_GetWindowSize failed: %s".as_ptr(), SDL_GetError());}
         exit(1);
     }
+    // TODO This function is available since SDL 3.4.0.
+    //if !unsafe{SDL_SetDefaultTextureScaleMode(renderer, SCALEMODE)} {
+    //    unsafe{SDL_Log(c"SDL_SetDefaultTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
+    //    exit(1);
+    //}
     State {
         show_exit_expl: false,
         file_load_path: std::ffi::OsString::new(),
@@ -194,6 +201,7 @@ fn new_state() -> State {
         view_rect: SDL_FRect::default(),
         view_zoom_level: 0,
         view_zoom_scale: 1.,
+        view_zoom_scalemode: SCALEMODE,
         view_rect_pre_mv_x: 0.,
         view_rect_pre_mv_y: 0.,
         view_init_rotate_angle_q: 0,
@@ -436,6 +444,10 @@ impl State {
                 exit(1);
             }
             unsafe{SDL_DestroySurface(surface);}
+            if !unsafe{SDL_SetTextureScaleMode(texture, self.view_zoom_scalemode)} {
+                unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
+                exit(1);
+            }
             self.anim_frames.push(Frame {
                 texture: texture,
                 delay: (delay_numer_ms / delay_denom_ms) as u64
@@ -470,6 +482,10 @@ impl State {
             exit(1);
         }
         unsafe{SDL_DestroySurface(surface);}
+        if !unsafe{SDL_SetTextureScaleMode(texture, self.view_zoom_scalemode)} {
+            unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
+            exit(1);
+        }
         self.anim_frames.push(Frame {
             texture: texture,
             delay: 0
@@ -894,6 +910,17 @@ fn main() {
                     SDL_SCANCODE_R => {
                         // rotate clockwise
                         state.view_rotate_angle_q = (state.view_rotate_angle_q + (if state.view_mirror {3} else {1})) % 4;
+                        state.render_window();
+                    }
+                    SDL_SCANCODE_S => {
+                        // switch scalemode
+                        state.view_zoom_scalemode = if state.view_zoom_scalemode==SDL_SCALEMODE_NEAREST {SDL_SCALEMODE_LINEAR} else {SDL_SCALEMODE_NEAREST};
+                        for frame in &state.anim_frames {
+                            if !unsafe{SDL_SetTextureScaleMode(frame.texture, state.view_zoom_scalemode)} {
+                                unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
+                                exit(1);
+                            }
+                        }
                         state.render_window();
                     }
                     SDL_SCANCODE_0 |
