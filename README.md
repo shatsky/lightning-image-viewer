@@ -2,9 +2,13 @@
 
 ![Screenshot](https://github.com/user-attachments/assets/eec3a227-2afb-4249-ae61-b0775d228884)
 
-Fast and lightweight desktop image (pre)viewer featuring unusual minimalistic "transparent fullscreen overlay" UI/UX with controls similar to map apps. In other words, there are no window frame, menus or toolbars which would require extra movements to manipulate the view; it displays just the image itself over underlying windows, allowing to pan (move) by moving mouse with left button pressed or keyboard arrows, zoom with scroll or keyboard +=/-/0 (into detail under cursor or in center) and close with left click or Enter (allowing quick toggle between file manager and image view). Image rectangle feels like window, but its size and position are changed upon pan and zoom without messing with window controls, so that nothing but display borders limits visible image surface, and underlying windows are visible outside of it, preserving "contextual continuity". Detailed controls description is in "Usage" section.
+Fast and lightweight desktop image (pre)viewer with 3 key UX features:
+- transparent fullscreen overlay; this means nothing but display borders limits visible image surface during pan&zoom, but at the same time underlying windows are visible outside of it (unless you toggle non transparent fit to display view)
+- pan&zoom into detail in one move; just move cursor onto the detail and drag it towards center with left button pressed while scrolling to zoom simultaneously (like in map apps; also possible to pan with keyboard arrows and zoom with +=/-/0)
+- toggle between file manager and image view; it can be closed with left click anywhere or keyboard Enter, so that image can be opened and closed by pressing same button/key repeatedly (and it opens typical "web optimized" images almost instantly)
+Detailed controls description is in "Usage" section.
 
-Implemented in ~~C and~~ Rust with SDL3 and image-rs. It does not currently do any complicated tricks to display images faster, but it's significantly faster than "common" desktop image viewers; just because it's small bloat-free native (as in "native code") app. Image loading speed should be on par with other lightweight viewers like feh; but "Lightning" in its name refers primarily to its UX, which allows to randomly open/close images from file manager and zoom/pan into details almost instantly (and also to something which inspired me to create it). You will probably like it if you have lots of downloaded images and photos from gadgets in your desktop computer, prefer to organize/browse them with generic file manager, like to look into details (set view to make certain object of composition fill your field of view, especially relevant for art) and you've got feeling that it's more comfortable to view images online with some webapp embedded viewers than local ones with local apps.
+Implemented in ~~C and~~ Rust with SDL3 and image-rs. It does not currently do any magic to display images "lightning fast", but it's significantly faster than "common" desktop image viewers; just because it's small bloat-free native (as in "native code") app. Image loading speed should be on par with other lightweight viewers like feh; but "Lightning" in its name refers primarily to its UX, which allows to randomly open/close images from file manager and zoom/pan into details almost instantly (and also to something which inspired me to create it). You will probably like it if you have lots of downloaded images and photos from gadgets in your desktop computer, prefer to organize/browse them with file manager, like to look into details (pan&zoom to make certain object of composition fill your field of view/display, especially relevant for art) and you've got feeling that it's more comfortable to view images online with some webapp embedded viewers than local ones with local apps.
 
 If screenshot and description above are not enough, you can try the app right in browser at https://shatsky.github.io/lightning-image-viewer/ (no, it's NOT a webapp, but it can be compiled to WebAssembly and run in common browsers, rendering to canvas via SDL3 backend).
 
@@ -45,10 +49,11 @@ Controls:
 - zoom: mouse scroll (into detail under cursor) or keyboard +=/-/0 (into detail in center of display, if left mouse button is not pressed, otherwise into detail under cursor, 0 for 1:1); zoom is discrete with geometric series of scales with multiplier of 2^(1/2) incl. 1:1; initially image is scaled to the largest scale in the series in which it fits in window/screen
 - pan: mouse move with left button pressed or keyboard arrows; keyboard pan delta is 40px and, like in map apps, it's "move the camera, not the object", i. e. image is moved in direction opposite to pressed key; initially image is centered
 - close: left mouse button click (if no action happened between press and release events), keyboard Enter (allowing "quick toggle" between file manager and image view by pressing same button/key repeatedly), Q or Esc
-- toggle fullscreen: middle mouse button click or keyboard F or F11; in fullscreen image is scaled to fit to screen, background is black; it's not pannable/zoomable, pan and zoom in fullscreen switch back to non-fullscreen, proceeding from last non-fullscreen view state (but rotation and mirroring state changes applied in fullscreen persist)
+- toggle non transparent fit to display view aka fullscreen: middle mouse button click or keyboard F or F11; in fullscreen image is scaled to fit to screen, background is black; it's not pannable/zoomable, pan and zoom in fullscreen switch back to non-fullscreen, proceeding from last non-fullscreen view state (but rotation and mirroring state changes applied in fullscreen persist)
 - toggle animation pause/playback: keyboard Space
 - switch next/previous file in directory: keyboard PgDn/PgUp (sorted by file modification time descending)
 - rotate and mirror: keyboard R/L (rotate 90 degrees clockwise/counter clockwise), M (mirror horizontally); changes are NOT saved, app has NO code for writing to files (I hate viewers overwriting my files when I'm not asking for it); initially image is rotated and mirrored as per EXIF and other supported metadata
+- switch scalemode (interpolation): keyboard S; currently toggles between "linear" and "nearest"; initially "linear"
 
 Note: pan/zoom/fullscreen controls basically replicate controls of leaflet.js which powers most web maps (but zoom and keyboard pan are 2x more granular) and Firefox&Chrome browsers
 
@@ -57,14 +62,15 @@ Note: pan/zoom/fullscreen controls basically replicate controls of leaflet.js wh
 Roadmap:
 - fix issue which occurs in GNOME and possibly other graphical environments which have shell UI in top left display corner and place invisible window at top left corner of "usable area", causing shift of visible image rectangle from intended position which is calculated with assumption that window is placed at top left display corner
 - sane limits for pan and zoom
-- display ahead of load (decode) completion (1st frame of animation, partial frame decoding, embedded thumbnail, external thumbnail used by file manager)
+- display ahead of load (decode) completion (1st frame of animation, partial frame decoding, embedded thumbnail, external thumbnail used by file manager), preload next/prev, loading in background thread
 - copying to clipboard
-- better interpolation in non-1:1 scales, maybe magic kernel sharp (currently linear)
+- better interpolation in non-1:1 scales, maybe magic kernel sharp (currently linear with possibility to toggle nearest)
 - background/single instance mode for opening with minimal delay (using D-Bus activation on Linux)
 - proper shadow (currently primitive semi transparent rect) and possibly some kind of border, UI menus and dialogs (currently only open file dialog and message explaining exit behavior upon 1st left click or Enter key press if launched without file cmdline arg), visual hints about current file and zoom (currently only filename displayed in window title which should be visible in taskbar), controls
 - some reasonable runtime configurability
 - ICC profile support (and other metadata which should affect resulting pixels)
 - test suite covering non trivial variants of supported image formats (currently tested on trivial image set generated with imagemagick)
+- possibility to map keys for running external tools for interactively moving to subdir (for sorting images) and for displaying specified text file containing lines starting with ISO datetime in chronological order with highlighted line having latest datetime preceding current image mtime (for viewing personal diary text file in context of photos or vice versa)
 - (maybe) video playback (ffmpeg? libmpv? gstreamer?)
 - (maybe) touch input support (SDL3 support for it seems not mature yet, most desktop environments translate it into mouse events for compatibility anyway), smooth transitions, continuous zoom
 - (maybe) vector graphics (SVG) support
