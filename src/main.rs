@@ -58,8 +58,15 @@ image files from file manager to use it as intended.";
 
 // design
 // - state obj holds (most of) persistent state incl. view_rect which defines current image size and position on display
-// - view_* functions update view via render_window()
+// - view_* functions redraw via render_window()
 // - event loop in main()
+// - both still and anim images are treated as vec of frames; still image vec has single frame with delay=0; anim playback code in event loop is skipped if vec len<2
+
+// review notes
+// - rewrite from C, intentionally close to original C source; I don't like sdl3-rs discarding SDL original entity naming, using unsafe sdl3-sys for now
+// - things with process lifetimes incl. SDL window and renderer are not managed, exit() and rely on OS to clean up; why not?
+// - SDL_CreateTextureFromSurface and SDL_SetWindowTitle don't need surface and str after call, ok to drop immediately
+// - I prefer explicit SDL event loop
 
 // TODO print errors provided in Result enums when loading image, incl. partial anim load
 // TODO atomic image view state, in image_load() create new and replace/switch upon success, loaded_images vec for cache/preload?
@@ -69,9 +76,6 @@ image files from file manager to use it as intended.";
 // TODO ensure that during scroll zoom same image pixel remains under cursor; active point?
 // TODO create window after image is loaded? (but window has to exist when image texture is created?)
 // TODO display GUI error msgs?
-// TODO ensure SDL functions error handling
-// TODO ensure SDL heap-allocated resources freeing (maybe not for process-lifelong, but image reloading can make some of them limited-liftime)
-// TODO is it nessessary to call SDL_DestroyWindow() or smth else before exit()? See also SDL_Quit(), atexit()
 // TODO add macro to "call function, check return val, log err and exit in case of failure" for bool SDL functions which return false in case of failure and set err
 
 // TODO image-rs and SDL types
@@ -82,6 +86,12 @@ struct Frame {
     //x_offset: i32,
     //y_offset: i32,
     delay: u64
+}
+
+impl Drop for Frame {
+    fn drop(&mut self) {
+        unsafe{SDL_DestroyTexture(self.texture);} // frame texture ptr always valid, frame only pushed to vec if SDL_CreateTextureFromSurface() succeeds
+    }
 }
 
 // TODO c_int = i32, c_float = f32? https://doc.rust-lang.org/beta/core/ffi/index.html
@@ -106,7 +116,6 @@ struct State {
     // - SDL_Surface which is pixmap in process mem (in RAM) used for software manipulation and rendering
     // - SDL_Texture which references "texture" entity owned by graphics hardware driver (usually in VRAM) used for hardware accelerated rendering
     // image file is first decoded to SDL_Surface, which is then loaded to SDL_Texture via SDL_CreateTextureFromSurface()
-    image_texture: *mut SDL_Texture,
     img_w: i32,
     img_h: i32,
     img_cur_x: f32,
@@ -183,7 +192,6 @@ fn new_state() -> State {
         win_pre_mv_cur_y: 0.,
         win_fullscreen: false,
         renderer: renderer,
-        image_texture: std::ptr::null_mut(),
         img_w: 0,
         img_h: 0,
         view_rect: SDL_FRect::default(),
@@ -226,13 +234,6 @@ extern "C" fn file_dialog_callback(userdata: *mut std::ffi::c_void, filelist: *c
 }
 
 impl State {
-    // fake
-    // image-rs image::Frame has dimensions and offsets, suggesting it can be subregion of full image area, but it seems that all 3 decoders currently implementing AnimationDecoder always return pre composed frames with full dimensions and zero offsets
-    // API-safe impl would need to clear image_texture subregion and blit into it
-    fn compose_anim_frame(&mut self) {
-        self.image_texture = self.anim_frames[self.anim_cur].texture;
-    }
-
     // set initial orientation, called upon loading image
     fn set_init_orient(&mut self, exif_orientation: u8) {
         match exif_orientation {
@@ -356,13 +357,16 @@ impl State {
         // TODO we absolutely need pixel perfect rendering at 1:1 scale, and we absolutely need interpolation at scales <1:1
         // default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect at 1:1
         // not in set_zoom_level() because it's not called when toggling fullscreen
-        if !unsafe{SDL_SetTextureScaleMode(self.image_texture, if view_rect.w<self.img_w as f32 {SCALEMODE_LOWER} else {if view_rect.w==self.img_w as f32 {SCALEMODE_EQUAL} else {SCALEMODE_GREATER}})} {
+        if !unsafe{SDL_SetTextureScaleMode(self.anim_frames[self.anim_cur].texture, if view_rect.w<self.img_w as f32 {SCALEMODE_LOWER} else {if view_rect.w==self.img_w as f32 {SCALEMODE_EQUAL} else {SCALEMODE_GREATER}})} {
             unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
         // copy image to presentation area in renderer backbuffer
         // TODO ensure that clipping is done correctly without overhead
-        if !unsafe{SDL_RenderTextureRotated(self.renderer, self.image_texture, std::ptr::null(), &view_rect, (self.view_rotate_angle_q*90) as f64, std::ptr::null(), if self.view_mirror {if self.view_rotate_angle_q%2==1 {SDL_FLIP_VERTICAL} else {SDL_FLIP_HORIZONTAL}} else {SDL_FLIP_NONE})} {
+        // TODO image-rs image::Frame has dimensions and offsets, suggesting it can be subregion of full image area, but it seems that all 3 decoders currently implementing AnimationDecoder always return pre composed frames with full dimensions and zero offsets
+        // API-safe impl would need to clear texture subregion and blit into it
+        // use intermediate composed texture or compose directly into window buf? Latter would require re-composing frame starting with last full frame at least if view_rect has changed
+        if !unsafe{SDL_RenderTextureRotated(self.renderer, self.anim_frames[self.anim_cur].texture, std::ptr::null(), &view_rect, (self.view_rotate_angle_q*90) as f64, std::ptr::null(), if self.view_mirror {if self.view_rotate_angle_q%2==1 {SDL_FLIP_VERTICAL} else {SDL_FLIP_HORIZONTAL}} else {SDL_FLIP_NONE})} {
             unsafe{SDL_Log(c"SDL_RenderTextureRotated failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
@@ -407,15 +411,26 @@ impl State {
     fn load_image_anim<'a>(&mut self, decoder: impl image::AnimationDecoder<'a>) {
         let frames = decoder.into_frames();
         for frame in frames {
-            let Ok(frame) = frame else {break;};
+            let Ok(frame) = frame else {
+                if self.file_load_initial && self.anim_frames.len()==0 {
+                    eprintln!("failed to get image from decoder");
+                }
+                break;
+            };
             let (delay_numer_ms, delay_denom_ms) = frame.delay().numer_denom_ms();
             if delay_denom_ms == 0 {
+                if self.file_load_initial && self.anim_frames.len()==0 {
+                    eprintln!("bad image frame delay");
+                }
                 break;
             }
             let buffer = frame.into_buffer();
             let (width, height) = buffer.dimensions();
             let mut raw = buffer.into_raw();
             if width>i32::MAX as u32/4 || (height!=0 && width*4>i32::MAX as u32/height) || (width*4*height) as usize>raw.len() {
+                if self.file_load_initial && self.anim_frames.len()==0 {
+                    eprintln!("bad image dimensions");
+                }
                 break;
             }
             let surface: *mut SDL_Surface = unsafe{SDL_CreateSurfaceFrom(width as i32, height as i32, SDL_PIXELFORMAT_ABGR8888, raw.as_mut_ptr() as *mut std::ffi::c_void, width as i32*4)};
@@ -434,17 +449,6 @@ impl State {
                 delay: (delay_numer_ms / delay_denom_ms) as u64
             });
         }
-        self.anim_cur = 0;
-        if self.anim_frames.len()>0 {
-            // set self.image_texture
-            self.compose_anim_frame();
-            self.anim_next_frame_time = unsafe{SDL_GetTicks()} + self.anim_frames[0].delay;
-        } else {
-            if self.file_load_initial {
-                eprintln!("failed to get any animation frames");
-            }
-        }
-        self.anim_paused = false;
     }
 
     fn load_image_still(&mut self, decoder: impl image::ImageDecoder) {
@@ -458,6 +462,9 @@ impl State {
         let (width, height) = (rgba8.width(), rgba8.height());
         let mut raw = rgba8.into_raw();
         if width>i32::MAX as u32/4 || (height!=0 && width*4>i32::MAX as u32/height) || (width*4*height) as usize>raw.len() {
+            if self.file_load_initial {
+                eprintln!("bad image dimensions");
+            }
             return;
         }
         let surface: *mut SDL_Surface = unsafe{SDL_CreateSurfaceFrom(width as i32, height as i32, SDL_PIXELFORMAT_ABGR8888, raw.as_mut_ptr() as *mut std::ffi::c_void, width as i32*4)};
@@ -465,12 +472,16 @@ impl State {
             unsafe{SDL_Log(c"SDL_CreateSurfaceFrom failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
-        self.image_texture = unsafe{SDL_CreateTextureFromSurface(self.renderer, surface)};
-        if self.image_texture.is_null() {
+        let texture = unsafe{SDL_CreateTextureFromSurface(self.renderer, surface)};
+        if texture.is_null() {
             unsafe{SDL_Log(c"SDL_CreateTextureFromSurface failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
         unsafe{SDL_DestroySurface(surface);}
+        self.anim_frames.push(Frame {
+            texture: texture,
+            delay: 0
+        });
     }
 
     // load image from current file_load_path
@@ -479,16 +490,7 @@ impl State {
 
         // free previous if loaded
         // after this we can't render until we load an image again; should be ok for single threaded program in which code which calls load_image() does not pass control to event loop until image is loaded successfully
-        while let Some(frame) = self.anim_frames.pop() {
-            if self.image_texture == frame.texture {
-                self.image_texture = std::ptr::null_mut();
-            }
-            unsafe{SDL_DestroyTexture(frame.texture);} // frame texture ptr always valid, frame only pushed to vec if SDL_CreateTextureFromSurface() succeeds
-        }
-        if !self.image_texture.is_null() {
-            unsafe{SDL_DestroyTexture(self.image_texture);}
-            self.image_texture = std::ptr::null_mut();
-        }
+        self.anim_frames.clear();
 
         let Ok(file) = std::fs::File::open(&self.file_load_path) else {
             if self.file_load_initial {
@@ -560,12 +562,15 @@ impl State {
                 self.load_image_still(decoder);
             }
         };
-        if self.image_texture.is_null() {
+        if self.anim_frames.len()==0 {
             if self.file_load_initial {
-                eprintln!("got and tried to use decoder but image texture has not been set, check preceding messages");
+                eprintln!("got and tried to use decoder but failed to get any frames, check preceding messages");
             }
             return;
         }
+        self.anim_cur = 0;
+        self.anim_next_frame_time = unsafe{SDL_GetTicks()} + self.anim_frames[0].delay;
+        self.anim_paused = false;
 
         self.file_load_success = true;
 
@@ -813,7 +818,6 @@ fn main() {
                 state.anim_cur = (state.anim_cur + 1) % state.anim_frames.len();
                 // display next frame if in time, else skip
                 if state.anim_next_frame_time >= now as u64 {
-                    state.compose_anim_frame();
                     state.render_window();
                 }
                 state.anim_next_frame_time += state.anim_frames[state.anim_cur].delay;
