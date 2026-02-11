@@ -68,16 +68,17 @@ image files from file manager to use it as intended.";
 
 // TODO print errors provided in Result enums when loading image, incl. partial anim load
 // TODO atomic image view state, in image_load() create new and replace/switch upon success, loaded_images vec for cache/preload?
-// TODO ensure that at zoom_level = 0 scale is precisely 1 and rendering is pixel perfect; floor rect (x, y), avoid pow() loss of precision for even zoom levels?
 // TODO don't drag or zoom if cursor out of view_rect?
 // TODO scale/position limits/constraints?
-// TODO ensure that during scroll zoom same image pixel remains under cursor; active point?
 // TODO create window after image is loaded? (but window has to exist when image texture is created?)
 // TODO display GUI error msgs?
 // TODO add macro to "call function, check return val, log err and exit in case of failure" for bool SDL functions which return false in case of failure and set err
 
 // TODO image-rs and SDL types
 struct Frame {
+    // SDL_Surface represents pixmap which is owned by process (in RAM), used for software manipulation and rendering
+    // SDL_Texture represents "texture" entity owned by GPU driver (usually in VRAM), used for hardware accelerated rendering
+    // image file is first decoded to buffer which is passed to SDL_CreateSurfaceFrom() to get SDL_Surface, which is then used to upload it to GPU and get SDL_Texture via SDL_CreateTextureFromSurface(), before freeing SDL_Surface and buffer
     texture: *mut SDL_Texture,
     //width: i32,
     //height: i32,
@@ -94,8 +95,6 @@ impl Drop for Frame {
 
 // TODO c_int = i32, c_float = f32? https://doc.rust-lang.org/beta/core/ffi/index.html
 struct State {
-    // cur_x, _y: coords of current point (under cursor)
-    // pre_mv: at start of move (drag) action
     show_exit_expl: bool, // need to show explain msg on left click or Enter instead of exit
     file_load_path: std::ffi::OsString,
     file_load_initial: bool,
@@ -104,27 +103,21 @@ struct State {
     window: *mut SDL_Window,
     win_w: i32,
     win_h: i32,
+    // window point currently under cursor (in window coords)
     win_cur_x: f32,
     win_cur_y: f32,
-    win_pre_mv_cur_x: f32,
-    win_pre_mv_cur_y: f32,
     win_fullscreen: bool,
     renderer: *mut SDL_Renderer,
-    // SDL has:
-    // - SDL_Surface which is pixmap in process mem (in RAM) used for software manipulation and rendering
-    // - SDL_Texture which references "texture" entity owned by graphics hardware driver (usually in VRAM) used for hardware accelerated rendering
-    // image file is first decoded to SDL_Surface, which is then loaded to SDL_Texture via SDL_CreateTextureFromSurface()
     img_w: i32,
     img_h: i32,
+    // image point currently under cursor, or which has been under cursor at beginning of current op (in image coords)
     img_cur_x: f32,
     img_cur_y: f32,
-    // image presentation area size and position (coords of top left corner relative to window)
+    // image presentation area size and position (top left corner point, in window coords)
     view_rect: SDL_FRect,
     view_zoom_level: i32, // 0 is for 1:1
     view_zoom_scale: f32,
     view_zoom_scalemode: SDL_ScaleMode,
-    view_rect_pre_mv_x: f32,
-    view_rect_pre_mv_y: f32,
     // init: initial after loading image/resetting view
     // rotate_angle_q: 1/4-turns
     view_init_rotate_angle_q: i32,
@@ -192,8 +185,6 @@ fn new_state() -> State {
         img_cur_y: 0.,
         win_cur_x: 0.,
         win_cur_y: 0.,
-        win_pre_mv_cur_x: 0.,
-        win_pre_mv_cur_y: 0.,
         win_fullscreen: false,
         renderer: renderer,
         img_w: 0,
@@ -202,8 +193,6 @@ fn new_state() -> State {
         view_zoom_level: 0,
         view_zoom_scale: 1.,
         view_zoom_scalemode: SCALEMODE,
-        view_rect_pre_mv_x: 0.,
-        view_rect_pre_mv_y: 0.,
         view_init_rotate_angle_q: 0,
         view_init_mirror: false,
         view_rotate_angle_q: 0,
@@ -620,63 +609,65 @@ impl State {
         }
     }
 
-    // save coords at start of move (drag) action which are used to update view_rect pos upon mouse motion; also has to be called if view_rect is changed by other action (zoom) during move
-    // before calling this, update win_cur_x, _y
-    fn save_pre_mv_coords(&mut self) {
-        self.view_rect_pre_mv_x = self.view_rect.x;
-        self.view_rect_pre_mv_y = self.view_rect.y;
-        self.win_pre_mv_cur_x = self.win_cur_x;
-        self.win_pre_mv_cur_y = self.win_cur_y;
-    }
-
-    // zoom with preserving image point currently under cursor
-    // used as mouse zoom action
-    fn view_zoom_to_level_at_cursor(&mut self, view_zoom_level: i32) {
-        if self.win_fullscreen {
-            self.set_win_fullscreen(false);
-        }
+    // called at beginning of mouse pan op (lmousebtn_pressed) or at mouse zoom op (mouse scroll) if it happens not during mouse pan op
+    fn update_cur_coords(&mut self) {
         unsafe{SDL_GetMouseState(&mut self.win_cur_x, &mut self.win_cur_y);}
         self.img_cur_x = (self.win_cur_x - self.view_rect.x) / self.view_zoom_scale;
         self.img_cur_y = (self.win_cur_y - self.view_rect.y) / self.view_zoom_scale;
-        self.set_zoom_level(view_zoom_level);
-        self.view_rect.x = self.win_cur_x - self.img_cur_x * self.view_zoom_scale;
-        self.view_rect.y = self.win_cur_y - self.img_cur_y * self.view_zoom_scale;
-        // TODO does cursor still lose current image point when zooming while dragging?
-        self.save_pre_mv_coords();
-        self.render_window();
     }
 
-    // zoom with preserving image point currently in the center of window
-    // used as keyboard zoom action
-    fn view_zoom_to_level_at_center(&mut self, view_zoom_level: i32) {
+    // update view_rect pos to place img_point at win_point
+    fn align_view_rect(&mut self, img_point: (f32, f32), win_point: (f32, f32)) {
+        self.view_rect.x = win_point.0 - img_point.0 * self.view_zoom_scale;
+        self.view_rect.y = win_point.1 - img_point.1 * self.view_zoom_scale;
+    }
+
+    // zoom into image point which is currently under cursor or has been under cursor at beginning of current mouse pan op
+    // used as mouse scroll action and as keyboard +=/-/0 action if lmousebtn_pressed, implementing mouse zoom op
+    fn view_zoom_into_cur(&mut self, view_zoom_level: i32, lmousebtn_pressed: bool) {
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
         }
-        let img_center_x: f32 = (self.win_w as f32 / 2. - self.view_rect.x) / self.view_zoom_scale;
-        let img_center_y: f32 = (self.win_h as f32 / 2. - self.view_rect.y) / self.view_zoom_scale;
+        // if mouse pan op is not currently happening
+        if !lmousebtn_pressed {
+            self.update_cur_coords();
+        }
         self.set_zoom_level(view_zoom_level);
-        self.view_rect.x = self.win_w as f32 / 2. - img_center_x * self.view_zoom_scale;
-        self.view_rect.y = self.win_h as f32 / 2. - img_center_y * self.view_zoom_scale;
-        self.save_pre_mv_coords();
+        // win_cur updated by motion event if lmousebtn_pressed, or by update_cur_coords() above
+        self.align_view_rect((self.img_cur_x, self.img_cur_y), (self.win_cur_x, self.win_cur_y));
         self.render_window();
     }
 
-    // move view_rect from pre_mv pos by vector of cursor movement from pre_mv to current coords
-    // used as mouse move action
-    fn view_move_from_pre_mv_by_cursor_mv(&mut self) {
+    // zoom into image point currently at center of window/display
+    // used as keyboard +=/-/0 action, implementing keyboard zoom op
+    fn view_zoom_into_center(&mut self, view_zoom_level: i32) {
+        if self.win_fullscreen {
+            self.set_win_fullscreen(false);
+        }
+        // image point currently at center of window/display
+        let img_cur_x: f32 = (self.win_w as f32 / 2. - self.view_rect.x) / self.view_zoom_scale;
+        let img_cur_y: f32 = (self.win_h as f32 / 2. - self.view_rect.y) / self.view_zoom_scale;
+        self.set_zoom_level(view_zoom_level);
+        self.align_view_rect((img_cur_x, img_cur_y), (self.win_w as f32 / 2., self.win_h as f32 / 2.));
+        self.render_window();
+    }
+
+    // update view_rect pos to place image point which has been under cursor at beginning of current mouse pan op at current cursor pos
+    // used as mouse move action, implementing mouse pan op
+    fn view_move_to_cur(&mut self) {
         // ignore new motion events until current one is processed (to prevent accumulation of events in queue and image movement lag behind cursor which can happen if app has to redraw for each motion event)
         unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), false);}
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
         }
-        self.view_rect.x = self.view_rect_pre_mv_x + (self.win_cur_x - self.win_pre_mv_cur_x);
-        self.view_rect.y = self.view_rect_pre_mv_y + (self.win_cur_y - self.win_pre_mv_cur_y);
+        // win_cur updated by motion event if lmousebtn_pressed, or this should not be called
+        self.align_view_rect((self.img_cur_x, self.img_cur_y), (self.win_cur_x, self.win_cur_y));
         self.render_window();
         unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), true);}
     }
 
-    // move view_rect by vector
-    // used as keyboard move action
+    // update view_rect pos to move it by vector
+    // used as keyboard move action, implementing keyboard pan op
     fn view_move_by_vector(&mut self, x: f32, y: f32) {
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
@@ -835,7 +826,7 @@ fn main() {
         match event.event_type() {
             SDL_EVENT_MOUSE_WHEEL => {
                 if unsafe{event.wheel}.y != 0. {
-                    state.view_zoom_to_level_at_cursor(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1});
+                    state.view_zoom_into_cur(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1}, lmousebtn_pressed);
                     should_exit_on_lmousebtn_release = false;
                 }
             }
@@ -843,7 +834,7 @@ fn main() {
                 if lmousebtn_pressed {
                     state.win_cur_x = unsafe{event.motion}.x;
                     state.win_cur_y = unsafe{event.motion}.y;
-                    state.view_move_from_pre_mv_by_cursor_mv();
+                    state.view_move_to_cur();
                     should_exit_on_lmousebtn_release = false;
                 }
             }
@@ -853,8 +844,7 @@ fn main() {
                 match unsafe{event.button}.button as i32 {
                     SDL_BUTTON_LEFT => {
                         lmousebtn_pressed = true;
-                        unsafe{SDL_GetMouseState(&mut state.win_cur_x, &mut state.win_cur_y);}
-                        state.save_pre_mv_coords();
+                        state.update_cur_coords();
                         should_exit_on_lmousebtn_release = true;
                     }
                     SDL_BUTTON_RIGHT => {
@@ -928,9 +918,9 @@ fn main() {
                         // zoom 1:1
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
-                            state.view_zoom_to_level_at_cursor(0);
+                            state.view_zoom_into_cur(0, true);
                         } else {
-                            state.view_zoom_to_level_at_center(0);
+                            state.view_zoom_into_center(0);
                         }
                     }
                     SDL_SCANCODE_RETURN |
@@ -957,9 +947,9 @@ fn main() {
                         // zoom out
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
-                            state.view_zoom_to_level_at_cursor(state.view_zoom_level-1);
+                            state.view_zoom_into_cur(state.view_zoom_level-1, true);
                         } else {
-                            state.view_zoom_to_level_at_center(state.view_zoom_level-1);
+                            state.view_zoom_into_center(state.view_zoom_level-1);
                         }
                     }
                     SDL_SCANCODE_EQUALS |
@@ -967,9 +957,9 @@ fn main() {
                         // zoom in
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
-                            state.view_zoom_to_level_at_cursor(state.view_zoom_level+1);
+                            state.view_zoom_into_cur(state.view_zoom_level+1, true);
                         } else {
-                            state.view_zoom_to_level_at_center(state.view_zoom_level+1);
+                            state.view_zoom_into_center(state.view_zoom_level+1);
                         }
                     }
                     SDL_SCANCODE_PAGEUP |
