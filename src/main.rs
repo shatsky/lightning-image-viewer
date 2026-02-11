@@ -22,9 +22,6 @@ const FRAME_WIDTH_LEFT: i32 = 6;
 const FRAME_COLOR: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 38);
 // non fullscreen
 const IMAGE_BACKGROUND_COLOR: (u8, u8, u8, u8) = (0xff, 0xff, 0xff, 0xff);
-const SCALEMODE_LOWER: SDL_ScaleMode = SDL_SCALEMODE_LINEAR;
-const SCALEMODE_EQUAL: SDL_ScaleMode = SDL_SCALEMODE_NEAREST;
-const SCALEMODE_GREATER: SDL_ScaleMode = SDL_SCALEMODE_LINEAR;
 
 static CONTEXT_MENU_MSG: &std::ffi::CStr =
 c"Context menu is not implemented. Controls summary:\n\
@@ -281,11 +278,7 @@ impl State {
     fn set_zoom_level(&mut self, view_zoom_level: i32) {
         self.view_zoom_level = view_zoom_level;
         // scale = sqrt(2)^zoom_level = 2^(0.5*zoom_level)
-        self.view_zoom_scale = 2_f32.powf(0.5 * view_zoom_level as f32);
-        // TODO tried to get pixel perfect rendering at integer scales with SDL_SCALEMODE_LINEAR, does not help
-        //if view_zoom_level%2 == 0 {
-        //    self.view_zoom_scale = 1 << (view_zoom_level / 2);
-        //}
+        self.view_zoom_scale = (0.5 * view_zoom_level as f32).exp2();
         self.view_rect.w = self.img_w as f32 * self.view_zoom_scale;
         self.view_rect.h = self.img_h as f32 * self.view_zoom_scale;
     }
@@ -296,32 +289,37 @@ impl State {
             unsafe{SDL_Log(c"SDL_RenderClear failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
-        // for non-fullscreen simply render with state values, but for fullscreen set view_rect values to fit to screen; using temporary local view_rect because we want state.view_rect values preserved for subsequent switch to non-fullscreen, and, with only transformations available in fullscreen being mirror and rotate, setting fullscreen view_rect values doesn't depend on previous fullscreen view_rect values
-        let mut view_rect: SDL_FRect = SDL_FRect::default();
+        let mut view_rect;
         if self.win_fullscreen {
-            // SDL_RenderTextureRotated() draws as if view_rect itself is rotated around its center; in non-fullscreen this is what we want, but in fullscreen we want it to fit to screen, so we have to set such view_rect values that it fits to screen when rotated; using temporary local conditionally-swapped win_w and win_h for setting view_rect.w and view_rect.h
-            let win_w = if self.view_rotate_angle_q%2==1 {self.win_h} else {self.win_w};
-            let win_h = if self.view_rotate_angle_q%2==1 {self.win_w} else {self.win_h};
-            // start with assumption that image is more stretched vertically than window, view_rect.h = win_h
-            view_rect.w = (self.img_w * win_h) as f32 / self.img_h as f32;
-            if view_rect.w > win_w as f32 {
-                view_rect.w = win_w as f32;
-                view_rect.h = (self.img_h * win_w) as f32 / self.img_w as f32;
-            } else {
-                view_rect.h = win_h as f32;
+            // for fullscreen, construct view_rect without using state.view_rect
+            view_rect = SDL_FRect::default();
+            // rotate and scale to fit width, if height does not fit scale to fit height
+            let (img_w, img_h) = if self.view_rotate_angle_q%2==1 {(self.img_h, self.img_w)} else {(self.img_w, self.img_h)};
+            view_rect.w = self.win_w as f32;
+            view_rect.h = (img_h * self.win_w) as f32 / img_w as f32;
+            if view_rect.h > self.win_h as f32 {
+                view_rect.w = (img_w * self.win_h) as f32 / img_h as f32;
+                view_rect.h = self.win_h as f32;
             }
-            // centered
+            // center
             view_rect.x = (self.win_w as f32 - view_rect.w) / 2.;
             view_rect.y = (self.win_h as f32 - view_rect.h) / 2.;
+            // align to display pixels
+            view_rect.x = view_rect.x.floor();
+            view_rect.y = view_rect.y.floor();
         } else {
-            // draw shadow and image bg
-            // SDL_RenderTextureRotated needs non rotated rect but SDL_RenderFillRect needs rotated; rotate and reset to non rotated after
             view_rect = self.view_rect;
+            // rotate
             if self.view_rotate_angle_q%2==1 {
                 view_rect.x += (view_rect.w - view_rect.h) / 2.;
                 view_rect.y += (view_rect.h - view_rect.w) / 2.;
                 (view_rect.w, view_rect.h) = (view_rect.h, view_rect.w);
             }
+            // align to display pixels
+            view_rect.x = view_rect.x.floor();
+            view_rect.y = view_rect.y.floor();
+            // draw shadow and image bg
+            let view_rect_saved = view_rect;
             view_rect.x -= FRAME_WIDTH_LEFT as f32;
             view_rect.y -= FRAME_WIDTH_TOP as f32;
             view_rect.w += (FRAME_WIDTH_LEFT + FRAME_WIDTH_RIGHT) as f32;
@@ -334,12 +332,7 @@ impl State {
                 unsafe{SDL_Log(c"SDL_RenderFillRect failed: %s".as_ptr(), SDL_GetError());}
                 exit(1);
             }
-            view_rect = self.view_rect;
-            if self.view_rotate_angle_q%2==1 {
-                view_rect.x += (view_rect.w - view_rect.h) / 2.;
-                view_rect.y += (view_rect.h - view_rect.w) / 2.;
-                (view_rect.w, view_rect.h) = (view_rect.h, view_rect.w);
-            }
+            view_rect = view_rect_saved;
             if !unsafe{SDL_SetRenderDrawColor(self.renderer, IMAGE_BACKGROUND_COLOR.0, IMAGE_BACKGROUND_COLOR.1, IMAGE_BACKGROUND_COLOR.2, IMAGE_BACKGROUND_COLOR.3)} {
                 unsafe{SDL_Log(c"SDL_SetRenderDrawColor failed: %s".as_ptr(), SDL_GetError());}
                 exit(1);
@@ -352,17 +345,16 @@ impl State {
                 unsafe{SDL_Log(c"SDL_SetRenderDrawColor failed: %s".as_ptr(), SDL_GetError())};
                 exit(1);
             }
-            view_rect = self.view_rect;
+            view_rect = view_rect_saved;
         }
-        // TODO we absolutely need pixel perfect rendering at 1:1 scale, and we absolutely need interpolation at scales <1:1
-        // default is SDL_SCALEMODE_LINEAR but it breaks pixel perfect at 1:1
-        // not in set_zoom_level() because it's not called when toggling fullscreen
-        if !unsafe{SDL_SetTextureScaleMode(self.anim_frames[self.anim_cur].texture, if view_rect.w<self.img_w as f32 {SCALEMODE_LOWER} else {if view_rect.w==self.img_w as f32 {SCALEMODE_EQUAL} else {SCALEMODE_GREATER}})} {
-            unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
-            exit(1);
+        // rotate again to restore non rotated because SDL_RenderTextureRotated needs non rotated
+        // rotation was nessessary in any case to get correct coords to align to display pixels for pixel perfect rendering
+        if self.view_rotate_angle_q%2==1 {
+            view_rect.x += (view_rect.w - view_rect.h) / 2.;
+            view_rect.y += (view_rect.h - view_rect.w) / 2.;
+            (view_rect.w, view_rect.h) = (view_rect.h, view_rect.w);
         }
         // copy image to presentation area in renderer backbuffer
-        // TODO ensure that clipping is done correctly without overhead
         // TODO image-rs image::Frame has dimensions and offsets, suggesting it can be subregion of full image area, but it seems that all 3 decoders currently implementing AnimationDecoder always return pre composed frames with full dimensions and zero offsets
         // API-safe impl would need to clear texture subregion and blit into it
         // use intermediate composed texture or compose directly into window buf? Latter would require re-composing frame starting with last full frame at least if view_rect has changed
@@ -382,14 +374,14 @@ impl State {
         self.view_rotate_angle_q = self.view_init_rotate_angle_q;
         self.view_mirror = self.view_init_mirror;
         // set max zoom level at which entire image fits in window
-        let win_w: i32 = if self.view_rotate_angle_q%2==1 {self.win_h} else {self.win_w};
-        let win_h: i32 = if self.view_rotate_angle_q%2==1 {self.win_w} else {self.win_h};
+        // scale to fit width, if height does not fit scale to fit height
+        let (img_w, img_h) = if self.view_rotate_angle_q%2==1 {(self.img_h, self.img_w)} else {(self.img_w, self.img_h)};
         // zoom_level = 2*log2(scale)
-        self.set_zoom_level((2. * (win_h as f32 / self.img_h as f32).log2()).floor() as i32);
-        if self.view_rect.w > win_w as f32 {
-            self.set_zoom_level((2. * (win_w as f32 / self.img_w as f32).log2()).floor() as i32);
+        self.set_zoom_level((2. * (self.win_w as f32 / img_w as f32).log2()).floor() as i32);
+        if self.view_rect.h > self.win_h as f32 {
+            self.set_zoom_level((2. * (self.win_h as f32 / img_h as f32).log2()).floor() as i32);
         }
-        // centered
+        // center
         self.view_rect.x = (self.win_w as f32 - self.view_rect.w) / 2.;
         self.view_rect.y = (self.win_h as f32 - self.view_rect.h) / 2.;
         self.render_window();
