@@ -6,6 +6,7 @@ Fast and lightweight desktop image (pre)viewer with 3 key UX features:
 - transparent fullscreen overlay; this means nothing but display borders limits visible image surface during pan&zoom, but at the same time underlying windows are visible outside of it (unless you toggle non transparent fit to display view)
 - pan&zoom into detail in one move; just move cursor onto the detail and drag it towards center with left button pressed while scrolling to zoom simultaneously (like in map apps; also possible to pan with keyboard arrows and zoom with +=/-/0)
 - toggle between file manager and image view; it can be closed with left click anywhere or keyboard Enter, so that image can be opened and closed by pressing same button/key repeatedly (and it opens typical "web optimized" images almost instantly)
+
 Detailed controls description is in "Usage" section.
 
 Implemented in ~~C and~~ Rust with SDL3 and image-rs. It does not currently do any magic to display images "lightning fast", but it's significantly faster than "common" desktop image viewers; just because it's small bloat-free native (as in "native code") app. Image loading speed should be on par with other lightweight viewers like feh; but "Lightning" in its name refers primarily to its UX, which allows to randomly open/close images from file manager and zoom/pan into details almost instantly (and also to something which inspired me to create it). You will probably like it if you have lots of downloaded images and photos from gadgets in your desktop computer, prefer to organize/browse them with file manager, like to look into details (pan&zoom to make certain object of composition fill your field of view/display, especially relevant for art) and you've got feeling that it's more comfortable to view images online with some webapp embedded viewers than local ones with local apps.
@@ -33,7 +34,7 @@ See GitHub releases page for pre-built Windows binaries and Ubuntu packages or, 
 
 Windows binaries are also published in [Microsoft Store](https://apps.microsoft.com/detail/9np4j8k90smk) ; it's recommended for Windows users to get the app from there, because it allows to manage file types associations conveniently; Windows Settings -> Apps -> Default Apps -> Lightning Image Viewer page lists file types supported by app.
 
-Note: release artifacts are built with build provenance attestation, allowing to verify that they are built via GitHub Actions workflow on GitHub CI/CD from original source. Attestations are available at https://github.com/shatsky/lightning-image-viewer/attestations (direct link to attestation for specific release should be provided in release notes), verification is as simple (if you trust GitHub to verify its signatures for you) as comparing SHA-256 hash of downloaded file with one listed in attestation.
+Note: release artifacts are built with build provenance attestation, allowing to verify that they are built via GitHub Actions workflow on GitHub CI/CD from original source. Attestations are available at https://github.com/shatsky/lightning-image-viewer/attestations (direct link to attestation for specific release should be provided in release notes), verification is as simple as comparing SHA-256 hash of downloaded file with one listed in attestation.
 
 Note: Windows binary should work properly on Windows 10 version 1903 (May 2019 update, in which support for setting process code page to UTF-8 via app manifest was added) or later
 
@@ -43,7 +44,9 @@ Note: on Linux Wayland with XWayland SDL3 currently falls back on X11 backend if
 
 ## Usage
 
-`lightning-image-viewer [file]` opens file, `lightning-image-viewer` without args displays file selection dialog. This app is intended to be launched via opening image files from file manager, being set as default app for image files of supported types; however it doesn't provide means to set file type associations, except for platform-specific metadata which lets platform know that is supports specific file types; please check your platform or file manager file type associations settings.
+`lightning-image-viewer [file]` opens file, `lightning-image-viewer` without args displays file selection dialog.
+
+Note: this app is intended to be launched via opening image files from file manager, being set as default app for image files of supported types; however it doesn't provide means to set file type associations, except for platform-specific metadata which lets platform know that is supports specific file types; please check your platform or file manager file type associations settings
 
 Controls:
 - zoom: mouse scroll (into detail under cursor) or keyboard +=/-/0 (into detail in center of display, if left mouse button is not pressed, otherwise into detail under cursor, 0 for 1:1); zoom is discrete with geometric series of scales with multiplier of 2^(1/2) incl. 1:1; initially image is scaled to the largest scale in the series in which it fits in window/screen
@@ -84,6 +87,6 @@ Development notes: https://shatsky.github.io/notes/2025-03-07_sdl3-image-viewer.
 ## Credits
 
 Special thanks to:
-- JYKITORS, for constantly supplying me with free (as in beer, not as in speech) delicious sushi (not as in Sushi file previewer for GNOME/Nautilus; by the way, this viewer can be used like Sushi/QuickLook, toggling (pre)view with Enter key, given that your file manager is configured to open images with it upon Enter key press; or with any other key, if you can configure your file manager accordingly and build the viewer with patched source to bind the key to exit action; check the event loop in `main()`)
+- JYKITORS, for constantly supplying me with free (as in beer, not as in speech) delicious sushi (not as in Sushi file previewer for GNOME/Nautilus; though this viewer "toggling" feature resembles Sushi/QuickLook UX, it's quite different, providing convenient borderless pan&zoom instead of illusion that input focus stays on file manager window)
 - ChatGPT (in case it does have consciousness after all), for its time-saving advice, and all humans who created knowledge which it was trained on
 - all conscious humans who don't copypaste valuable lossy-compressed images as pixmaps (which causes loss of compression and addition of new compression artifacts upon repeated lossy compression) but share them as files
