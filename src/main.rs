@@ -54,11 +54,14 @@ Upon next occurrence app will exit.\n\
 Please associate app with supported image file types and launch it via opening\n\
 image files from file manager to use it as intended.";
 
-// design
+// design notes
 // - state obj holds (most of) persistent state incl. view_rect which defines current image size and position on display
 // - view_* functions redraw via render_window()
 // - event loop in main()
 // - both still and anim images are treated as vec of frames; still image vec has single frame with delay=0; anim playback code in event loop is skipped if vec len<2
+// - if orientation (rotate and mirror) metadata is provided by decoder, pixmap is not rotated in mem but loaded to texture as is; orientation metadata is used to set initial orientation state values, which are used in rendering call in render_window(); view_rect is not rotated as per orientation state, too; SDL renderer takes non rotated rect with separate rotation angle arg and renders texture rotated
+// - view_rect is copied in render_window() and copy is adjusted (pos coords floored to align to display pixels) and used for rendering call
+// - for ops which preserve image point under cursor when transforming view, "currently relevant window and image points coords" are saved when needed, then used to position view_rect; also for zoom into center, central point is handled same way
 
 // review notes
 // - rewrite from C, intentionally close to original C source; I don't like sdl3-rs discarding SDL original entity naming, using unsafe sdl3-sys for now
@@ -73,6 +76,8 @@ image files from file manager to use it as intended.";
 // TODO create window after image is loaded? (but window has to exist when image texture is created?)
 // TODO display GUI error msgs?
 // TODO add macro to "call function, check return val, log err and exit in case of failure" for bool SDL functions which return false in case of failure and set err
+// TODO store coords and dimensions as tuples? Vec2 with math operations impl?
+// TODO transform matrix instead of scale, view_rect and orientation? view_rect seems more practical for now
 
 // TODO image-rs and SDL types
 struct Frame {
@@ -103,14 +108,25 @@ struct State {
     window: *mut SDL_Window,
     win_w: i32,
     win_h: i32,
-    // window point currently under cursor (in window coords)
+    // currently relevant window point
+    // updated to current coords of cursor upon:
+    // - mouse move, if left button is pressed
+    // - left button press
+    // - scroll, if left button is not pressed
+    // updated to coords of center of window upon:
+    // - keyboard zoom keys, if left button is not pressed
     win_cur_x: f32,
     win_cur_y: f32,
     win_fullscreen: bool,
     renderer: *mut SDL_Renderer,
     img_w: i32,
     img_h: i32,
-    // image point currently under cursor, or which has been under cursor at beginning of current op (in image coords)
+    // currently relevant image point
+    // updated to coords of image point currently under cursor upon:
+    // - left button press
+    // - scroll, if left button is not pressed
+    // updated to coords of image point currently in center of window upon:
+    // - keyboard zoom keys, if left button is not pressed
     img_cur_x: f32,
     img_cur_y: f32,
     // image presentation area size and position (top left corner point, in window coords)
@@ -118,11 +134,7 @@ struct State {
     view_zoom_level: i32, // 0 is for 1:1
     view_zoom_scale: f32,
     view_zoom_scalemode: SDL_ScaleMode,
-    // init: initial after loading image/resetting view
-    // rotate_angle_q: 1/4-turns
-    view_init_rotate_angle_q: i32,
-    view_init_mirror: bool,
-    view_rotate_angle_q: i32,
+    view_rotate_angle_q: i32, // 1/4-turns
     view_mirror: bool,
     filelist: Vec<std::ffi::OsString>, // list of filenames in dir
     filelist_cur: usize, // index of filelist item name of which is currently pointed by state.file_load_path
@@ -181,20 +193,18 @@ fn new_state() -> State {
         window: window,
         win_w: win_w,
         win_h: win_h,
-        img_cur_x: 0.,
-        img_cur_y: 0.,
         win_cur_x: 0.,
         win_cur_y: 0.,
         win_fullscreen: false,
         renderer: renderer,
         img_w: 0,
         img_h: 0,
+        img_cur_x: 0.,
+        img_cur_y: 0.,
         view_rect: SDL_FRect::default(),
         view_zoom_level: 0,
         view_zoom_scale: 1.,
         view_zoom_scalemode: SCALEMODE,
-        view_init_rotate_angle_q: 0,
-        view_init_mirror: false,
         view_rotate_angle_q: 0,
         view_mirror: false,
         filelist: Vec::<std::ffi::OsString>::new(),
@@ -237,36 +247,36 @@ impl State {
             //    self.view_init_mirror = false;
             //}
             2 => {
-                self.view_init_rotate_angle_q = 0;
-                self.view_init_mirror = true;
+                self.view_rotate_angle_q = 0;
+                self.view_mirror = true;
             }
             3 => {
-                self.view_init_rotate_angle_q = 2;
-                self.view_init_mirror = false;
+                self.view_rotate_angle_q = 2;
+                self.view_mirror = false;
             }
             4 => {
-                self.view_init_rotate_angle_q = 2;
-                self.view_init_mirror = true;
+                self.view_rotate_angle_q = 2;
+                self.view_mirror = true;
             }
             5 => {
-                self.view_init_rotate_angle_q = 1;
-                self.view_init_mirror = true;
+                self.view_rotate_angle_q = 1;
+                self.view_mirror = true;
             }
             6 => {
-                self.view_init_rotate_angle_q = 1;
-                self.view_init_mirror = false;
+                self.view_rotate_angle_q = 1;
+                self.view_mirror = false;
             }
             7 => {
-                self.view_init_rotate_angle_q = 3;
-                self.view_init_mirror = true;
+                self.view_rotate_angle_q = 3;
+                self.view_mirror = true;
             }
             8 => {
-                self.view_init_rotate_angle_q = 3;
-                self.view_init_mirror = false;
+                self.view_rotate_angle_q = 3;
+                self.view_mirror = false;
             }
             _ => {
-                self.view_init_rotate_angle_q = 0;
-                self.view_init_mirror = false;
+                self.view_rotate_angle_q = 0;
+                self.view_mirror = false;
             }
         }
     }
@@ -288,7 +298,7 @@ impl State {
         }
         let mut view_rect;
         if self.win_fullscreen {
-            // for fullscreen, construct view_rect without using state.view_rect
+            // for fullscreen, construct view_rect from scratch
             view_rect = SDL_FRect::default();
             // rotate and scale to fit width, if height does not fit scale to fit height
             let (img_w, img_h) = if self.view_rotate_angle_q%2==1 {(self.img_h, self.img_w)} else {(self.img_w, self.img_h)};
@@ -368,8 +378,6 @@ impl State {
 
     // reset view_rect to initial scale and position
     fn view_reset(&mut self) {
-        self.view_rotate_angle_q = self.view_init_rotate_angle_q;
-        self.view_mirror = self.view_init_mirror;
         // set max zoom level at which entire image fits in window
         // scale to fit width, if height does not fit scale to fit height
         let (img_w, img_h) = if self.view_rotate_angle_q%2==1 {(self.img_h, self.img_w)} else {(self.img_w, self.img_h)};
@@ -609,66 +617,57 @@ impl State {
         }
     }
 
-    // called at beginning of mouse pan op (lmousebtn_pressed) or at mouse zoom op (mouse scroll) if it happens not during mouse pan op
-    fn update_cur_coords(&mut self) {
-        unsafe{SDL_GetMouseState(&mut self.win_cur_x, &mut self.win_cur_y);}
+    // ok with transformed (mirrored and rotated) view; img_cur coords do not match real img coords under cursor, but visual result is same; however preserving image point under cursor during view transformation will require transformation of saved coords
+
+    // update currently relevant image point coords from currently relevant window point, i. e. translate window coords to image coords
+    fn set_current_img_coords(&mut self) {
         self.img_cur_x = (self.win_cur_x - self.view_rect.x) / self.view_zoom_scale;
         self.img_cur_y = (self.win_cur_y - self.view_rect.y) / self.view_zoom_scale;
     }
 
-    // update view_rect pos to place img_point at win_point
-    fn align_view_rect(&mut self, img_point: (f32, f32), win_point: (f32, f32)) {
-        self.view_rect.x = win_point.0 - img_point.0 * self.view_zoom_scale;
-        self.view_rect.y = win_point.1 - img_point.1 * self.view_zoom_scale;
+    // update currently relevant window and image points coords from current cursor pos
+    fn set_current_coords_from_cursor(&mut self) {
+        unsafe{SDL_GetMouseState(&mut self.win_cur_x, &mut self.win_cur_y);}
+        self.set_current_img_coords();
     }
 
-    // zoom into image point which is currently under cursor or has been under cursor at beginning of current mouse pan op
-    // used as mouse scroll action and as keyboard +=/-/0 action if lmousebtn_pressed, implementing mouse zoom op
-    fn view_zoom_into_cur(&mut self, view_zoom_level: i32, lmousebtn_pressed: bool) {
+    // update currently relevant window and image points coords from window center point
+    fn set_current_coords_from_center(&mut self) {
+        self.win_cur_x = self.win_w as f32 / 2.;
+        self.win_cur_y = self.win_h as f32 / 2.;
+        self.set_current_img_coords();
+    }
+
+    // update view_rect pos to align currently relevant image and window points, i. e. move it so that currently relevant image point it placed at currently relevant window point
+    fn move_to_current_coords(&mut self) {
+        self.view_rect.x = self.win_cur_x - self.img_cur_x * self.view_zoom_scale;
+        self.view_rect.y = self.win_cur_y - self.img_cur_y * self.view_zoom_scale;
+    }
+
+    // universal zoom, behaviour depends on current coords
+    fn view_zoom(&mut self, view_zoom_level: i32) {
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
         }
-        // if mouse pan op is not currently happening
-        if !lmousebtn_pressed {
-            self.update_cur_coords();
-        }
         self.set_zoom_level(view_zoom_level);
-        // win_cur updated by motion event if lmousebtn_pressed, or by update_cur_coords() above
-        self.align_view_rect((self.img_cur_x, self.img_cur_y), (self.win_cur_x, self.win_cur_y));
+        self.move_to_current_coords();
         self.render_window();
     }
 
-    // zoom into image point currently at center of window/display
-    // used as keyboard +=/-/0 action, implementing keyboard zoom op
-    fn view_zoom_into_center(&mut self, view_zoom_level: i32) {
-        if self.win_fullscreen {
-            self.set_win_fullscreen(false);
-        }
-        // image point currently at center of window/display
-        let img_cur_x: f32 = (self.win_w as f32 / 2. - self.view_rect.x) / self.view_zoom_scale;
-        let img_cur_y: f32 = (self.win_h as f32 / 2. - self.view_rect.y) / self.view_zoom_scale;
-        self.set_zoom_level(view_zoom_level);
-        self.align_view_rect((img_cur_x, img_cur_y), (self.win_w as f32 / 2., self.win_h as f32 / 2.));
-        self.render_window();
-    }
-
-    // update view_rect pos to place image point which has been under cursor at beginning of current mouse pan op at current cursor pos
-    // used as mouse move action, implementing mouse pan op
-    fn view_move_to_cur(&mut self) {
+    // mouse pan
+    fn view_move_to_current_coords(&mut self) {
         // ignore new motion events until current one is processed (to prevent accumulation of events in queue and image movement lag behind cursor which can happen if app has to redraw for each motion event)
         unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), false);}
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
         }
-        // win_cur updated by motion event if lmousebtn_pressed, or this should not be called
-        self.align_view_rect((self.img_cur_x, self.img_cur_y), (self.win_cur_x, self.win_cur_y));
+        self.move_to_current_coords();
         self.render_window();
         unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), true);}
     }
 
-    // update view_rect pos to move it by vector
-    // used as keyboard move action, implementing keyboard pan op
-    fn view_move_by_vector(&mut self, x: f32, y: f32) {
+    // keyboard pan
+    fn view_move_by_offset(&mut self, x: f32, y: f32) {
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
         }
@@ -826,7 +825,11 @@ fn main() {
         match event.event_type() {
             SDL_EVENT_MOUSE_WHEEL => {
                 if unsafe{event.wheel}.y != 0. {
-                    state.view_zoom_into_cur(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1}, lmousebtn_pressed);
+                    // if lmousebtn_pressed, use cur coords saved at start of mouse pan op
+                    if !lmousebtn_pressed {
+                        state.set_current_coords_from_cursor();
+                    }
+                    state.view_zoom(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1});
                     should_exit_on_lmousebtn_release = false;
                 }
             }
@@ -834,7 +837,7 @@ fn main() {
                 if lmousebtn_pressed {
                     state.win_cur_x = unsafe{event.motion}.x;
                     state.win_cur_y = unsafe{event.motion}.y;
-                    state.view_move_to_cur();
+                    state.view_move_to_current_coords();
                     should_exit_on_lmousebtn_release = false;
                 }
             }
@@ -844,7 +847,7 @@ fn main() {
                 match unsafe{event.button}.button as i32 {
                     SDL_BUTTON_LEFT => {
                         lmousebtn_pressed = true;
-                        state.update_cur_coords();
+                        state.set_current_coords_from_cursor();
                         should_exit_on_lmousebtn_release = true;
                     }
                     SDL_BUTTON_RIGHT => {
@@ -918,10 +921,10 @@ fn main() {
                         // zoom 1:1
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
-                            state.view_zoom_into_cur(0, true);
                         } else {
-                            state.view_zoom_into_center(0);
+                            state.set_current_coords_from_center();
                         }
+                        state.view_zoom(0);
                     }
                     SDL_SCANCODE_RETURN |
                     SDL_SCANCODE_KP_ENTER => {
@@ -947,20 +950,20 @@ fn main() {
                         // zoom out
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
-                            state.view_zoom_into_cur(state.view_zoom_level-1, true);
                         } else {
-                            state.view_zoom_into_center(state.view_zoom_level-1);
+                            state.set_current_coords_from_center();
                         }
+                        state.view_zoom(state.view_zoom_level-1);
                     }
                     SDL_SCANCODE_EQUALS |
                     SDL_SCANCODE_KP_PLUS => {
                         // zoom in
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
-                            state.view_zoom_into_cur(state.view_zoom_level+1, true);
                         } else {
-                            state.view_zoom_into_center(state.view_zoom_level+1);
+                            state.set_current_coords_from_center();
                         }
+                        state.view_zoom(state.view_zoom_level+1);
                     }
                     SDL_SCANCODE_PAGEUP |
                     SDL_SCANCODE_KP_9 => {
@@ -975,22 +978,22 @@ fn main() {
                     SDL_SCANCODE_RIGHT |
                     SDL_SCANCODE_KP_6 => {
                         // move right
-                        state.view_move_by_vector(-KEYBOARD_PAN_DELTA, 0.);
+                        state.view_move_by_offset(-KEYBOARD_PAN_DELTA, 0.);
                     }
                     SDL_SCANCODE_LEFT |
                     SDL_SCANCODE_KP_4 => {
                         // move left
-                        state.view_move_by_vector(KEYBOARD_PAN_DELTA, 0.);
+                        state.view_move_by_offset(KEYBOARD_PAN_DELTA, 0.);
                     }
                     SDL_SCANCODE_DOWN |
                     SDL_SCANCODE_KP_2 => {
                         // move down
-                        state.view_move_by_vector(0., -KEYBOARD_PAN_DELTA);
+                        state.view_move_by_offset(0., -KEYBOARD_PAN_DELTA);
                     }
                     SDL_SCANCODE_UP |
                     SDL_SCANCODE_KP_8 => {
                         // move up
-                        state.view_move_by_vector(0., KEYBOARD_PAN_DELTA);
+                        state.view_move_by_offset(0., KEYBOARD_PAN_DELTA);
                     }
                     _ => {}
                 }
