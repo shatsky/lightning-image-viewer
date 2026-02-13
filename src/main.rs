@@ -61,7 +61,7 @@ image files from file manager to use it as intended.";
 // - both still and anim images are treated as vec of frames; still image vec has single frame with delay=0; anim playback code in event loop is skipped if vec len<2
 // - if orientation (rotate and mirror) metadata is provided by decoder, pixmap is not rotated in mem but loaded to texture as is; orientation metadata is used to set initial orientation state values, which are used in rendering call in render_window(); view_rect is not rotated as per orientation state, too; SDL renderer takes non rotated rect with separate rotation angle arg and renders texture rotated
 // - view_rect is copied in render_window() and copy is adjusted (pos coords floored to align to display pixels) and used for rendering call
-// - for ops which preserve image point under cursor when transforming view, "currently relevant window and image points coords" are saved when needed, then used to position view_rect; also for zoom into center, central point is handled same way
+// - for view transforming ops which preserve certain image point pos (under cursor or in center), win and img coords of "selected point" are saved in state, then used to move view_rect pos to align img selected point to win selected point
 
 // review notes
 // - rewrite from C, intentionally close to original C source; I don't like sdl3-rs discarding SDL original entity naming, using unsafe sdl3-sys for now
@@ -108,27 +108,27 @@ struct State {
     window: *mut SDL_Window,
     win_w: i32,
     win_h: i32,
-    // currently relevant window point
+    // selected window point
     // updated to current coords of cursor upon:
     // - mouse move, if left button is pressed
     // - left button press
     // - scroll, if left button is not pressed
     // updated to coords of center of window upon:
     // - keyboard zoom keys, if left button is not pressed
-    win_cur_x: f32,
-    win_cur_y: f32,
+    win_sel_x: f32,
+    win_sel_y: f32,
     win_fullscreen: bool,
     renderer: *mut SDL_Renderer,
     img_w: i32,
     img_h: i32,
-    // currently relevant image point
+    // selected image point
     // updated to coords of image point currently under cursor upon:
     // - left button press
     // - scroll, if left button is not pressed
     // updated to coords of image point currently in center of window upon:
     // - keyboard zoom keys, if left button is not pressed
-    img_cur_x: f32,
-    img_cur_y: f32,
+    img_sel_x: f32,
+    img_sel_y: f32,
     // image presentation area size and position (top left corner point, in window coords)
     view_rect: SDL_FRect,
     view_zoom_level: i32, // 0 is for 1:1
@@ -193,14 +193,14 @@ fn new_state() -> State {
         window: window,
         win_w: win_w,
         win_h: win_h,
-        win_cur_x: 0.,
-        win_cur_y: 0.,
+        win_sel_x: 0.,
+        win_sel_y: 0.,
         win_fullscreen: false,
         renderer: renderer,
         img_w: 0,
         img_h: 0,
-        img_cur_x: 0.,
-        img_cur_y: 0.,
+        img_sel_x: 0.,
+        img_sel_y: 0.,
         view_rect: SDL_FRect::default(),
         view_zoom_level: 0,
         view_zoom_scale: 1.,
@@ -300,7 +300,7 @@ impl State {
         if self.win_fullscreen {
             // for fullscreen, construct view_rect from scratch
             view_rect = SDL_FRect::default();
-            // rotate and scale to fit width, if height does not fit scale to fit height
+            // rotate and scale to fit width; if height does not fit, scale to fit height
             let (img_w, img_h) = if self.view_rotate_angle_q%2==1 {(self.img_h, self.img_w)} else {(self.img_w, self.img_h)};
             view_rect.w = self.win_w as f32;
             view_rect.h = (img_h * self.win_w) as f32 / img_w as f32;
@@ -379,7 +379,7 @@ impl State {
     // reset view_rect to initial scale and position
     fn view_reset(&mut self) {
         // set max zoom level at which entire image fits in window
-        // scale to fit width, if height does not fit scale to fit height
+        // scale to fit width; if height does not fit, scale to fit height
         let (img_w, img_h) = if self.view_rotate_angle_q%2==1 {(self.img_h, self.img_w)} else {(self.img_w, self.img_h)};
         // zoom_level = 2*log2(scale)
         self.set_zoom_level((2. * (self.win_w as f32 / img_w as f32).log2()).floor() as i32);
@@ -619,49 +619,46 @@ impl State {
 
     // ok with transformed (mirrored and rotated) view; img_cur coords do not match real img coords under cursor, but visual result is same; however preserving image point under cursor during view transformation will require transformation of saved coords
 
-    // update currently relevant image point coords from currently relevant window point, i. e. translate window coords to image coords
-    fn set_current_img_coords(&mut self) {
-        self.img_cur_x = (self.win_cur_x - self.view_rect.x) / self.view_zoom_scale;
-        self.img_cur_y = (self.win_cur_y - self.view_rect.y) / self.view_zoom_scale;
+    // coords of img point currently at selected win point, i. e. translation of win coords to img coords
+    fn select_img_point_at_selected_win_point(&mut self) {
+        self.img_sel_x = (self.win_sel_x - self.view_rect.x) / self.view_zoom_scale;
+        self.img_sel_y = (self.win_sel_y - self.view_rect.y) / self.view_zoom_scale;
     }
 
-    // update currently relevant window and image points coords from current cursor pos
-    fn set_current_coords_from_cursor(&mut self) {
-        unsafe{SDL_GetMouseState(&mut self.win_cur_x, &mut self.win_cur_y);}
-        self.set_current_img_coords();
+    fn select_win_and_img_points_under_cursor(&mut self) {
+        unsafe{SDL_GetMouseState(&mut self.win_sel_x, &mut self.win_sel_y);}
+        self.select_img_point_at_selected_win_point();
     }
 
-    // update currently relevant window and image points coords from window center point
-    fn set_current_coords_from_center(&mut self) {
-        self.win_cur_x = self.win_w as f32 / 2.;
-        self.win_cur_y = self.win_h as f32 / 2.;
-        self.set_current_img_coords();
+    fn select_win_and_img_points_in_center(&mut self) {
+        self.win_sel_x = self.win_w as f32 / 2.;
+        self.win_sel_y = self.win_h as f32 / 2.;
+        self.select_img_point_at_selected_win_point();
     }
 
-    // update view_rect pos to align currently relevant image and window points, i. e. move it so that currently relevant image point it placed at currently relevant window point
-    fn move_to_current_coords(&mut self) {
-        self.view_rect.x = self.win_cur_x - self.img_cur_x * self.view_zoom_scale;
-        self.view_rect.y = self.win_cur_y - self.img_cur_y * self.view_zoom_scale;
+    fn move_to_place_selected_img_point_at_selected_win_point(&mut self) {
+        self.view_rect.x = self.win_sel_x - self.img_sel_x * self.view_zoom_scale;
+        self.view_rect.y = self.win_sel_y - self.img_sel_y * self.view_zoom_scale;
     }
 
-    // universal zoom, behaviour depends on current coords
+    // mouse and keyboard zoom, into selected point(s), behaviour depends on selected point(s)
     fn view_zoom(&mut self, view_zoom_level: i32) {
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
         }
         self.set_zoom_level(view_zoom_level);
-        self.move_to_current_coords();
+        self.move_to_place_selected_img_point_at_selected_win_point();
         self.render_window();
     }
 
     // mouse pan
-    fn view_move_to_current_coords(&mut self) {
+    fn view_move_to_place_selected_img_point_at_selected_win_point(&mut self) {
         // ignore new motion events until current one is processed (to prevent accumulation of events in queue and image movement lag behind cursor which can happen if app has to redraw for each motion event)
         unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), false);}
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
         }
-        self.move_to_current_coords();
+        self.move_to_place_selected_img_point_at_selected_win_point();
         self.render_window();
         unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), true);}
     }
@@ -827,7 +824,7 @@ fn main() {
                 if unsafe{event.wheel}.y != 0. {
                     // if lmousebtn_pressed, use cur coords saved at start of mouse pan op
                     if !lmousebtn_pressed {
-                        state.set_current_coords_from_cursor();
+                        state.select_win_and_img_points_under_cursor();
                     }
                     state.view_zoom(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1});
                     should_exit_on_lmousebtn_release = false;
@@ -835,9 +832,9 @@ fn main() {
             }
             SDL_EVENT_MOUSE_MOTION => {
                 if lmousebtn_pressed {
-                    state.win_cur_x = unsafe{event.motion}.x;
-                    state.win_cur_y = unsafe{event.motion}.y;
-                    state.view_move_to_current_coords();
+                    state.win_sel_x = unsafe{event.motion}.x;
+                    state.win_sel_y = unsafe{event.motion}.y;
+                    state.view_move_to_place_selected_img_point_at_selected_win_point();
                     should_exit_on_lmousebtn_release = false;
                 }
             }
@@ -847,7 +844,7 @@ fn main() {
                 match unsafe{event.button}.button as i32 {
                     SDL_BUTTON_LEFT => {
                         lmousebtn_pressed = true;
-                        state.set_current_coords_from_cursor();
+                        state.select_win_and_img_points_under_cursor();
                         should_exit_on_lmousebtn_release = true;
                     }
                     SDL_BUTTON_RIGHT => {
@@ -922,7 +919,7 @@ fn main() {
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
                         } else {
-                            state.set_current_coords_from_center();
+                            state.select_win_and_img_points_in_center();
                         }
                         state.view_zoom(0);
                     }
@@ -951,7 +948,7 @@ fn main() {
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
                         } else {
-                            state.set_current_coords_from_center();
+                            state.select_win_and_img_points_in_center();
                         }
                         state.view_zoom(state.view_zoom_level-1);
                     }
@@ -961,7 +958,7 @@ fn main() {
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
                         } else {
-                            state.set_current_coords_from_center();
+                            state.select_win_and_img_points_in_center();
                         }
                         state.view_zoom(state.view_zoom_level+1);
                     }
