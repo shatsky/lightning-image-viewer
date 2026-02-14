@@ -104,8 +104,8 @@ struct State {
     file_load_path: std::ffi::OsString,
     file_load_initial: bool,
     file_load_success: bool,
-    file_dialog_semaphore: *mut SDL_Semaphore,
-    window: *mut SDL_Window,
+    file_dialog_semaphore: std::ptr::NonNull<SDL_Semaphore>,
+    window: std::ptr::NonNull<SDL_Window>,
     win_w: i32,
     win_h: i32,
     // selected window point
@@ -118,7 +118,7 @@ struct State {
     win_sel_x: f32,
     win_sel_y: f32,
     win_fullscreen: bool,
-    renderer: *mut SDL_Renderer,
+    renderer: std::ptr::NonNull<SDL_Renderer>,
     img_w: i32,
     img_h: i32,
     // selected image point
@@ -153,6 +153,10 @@ fn new_state() -> State {
         unsafe{SDL_Log(c"SDL_Init failed: %s".as_ptr(), SDL_GetError());}
         exit(1);
     }
+    let Some(file_dialog_semaphore) = std::ptr::NonNull::<SDL_Semaphore>::new(unsafe{SDL_CreateSemaphore(0)}) else {
+        unsafe{SDL_Log(c"SDL_CreateSemaphore failed: %s".as_ptr(), SDL_GetError());}
+        exit(1);
+    };
     let display: SDL_DisplayID = unsafe{SDL_GetPrimaryDisplay()};
     if display == 0 {
         unsafe{SDL_Log(c"SDL_GetPrimaryDisplay failed: %s".as_ptr(), SDL_GetError());}
@@ -167,15 +171,23 @@ fn new_state() -> State {
     }
     // TODO is window created on primary display?
     // SDL2 SDL_CreateWindow() had x, y position parameters seemingly assuming global desktop coordinate system so that x, y from SDL_GetDisplayBounds() could be used to request compositor to place window at the top left corner of the given display (if implemented in protocol and SDL backend); SDL3 doesn't have them anymore
-    let mut window: *mut SDL_Window = std::ptr::null_mut();
-    let mut renderer: *mut SDL_Renderer = std::ptr::null_mut();
-    if !unsafe{SDL_CreateWindowAndRenderer(APP_NAME.as_ptr(), (*display_mode).w, (*display_mode).h, SDL_WINDOW_BORDERLESS|SDL_WINDOW_MAXIMIZED|SDL_WINDOW_TRANSPARENT, &mut window, &mut renderer)} {
+    let mut window_ptr: *mut SDL_Window = std::ptr::null_mut();
+    let mut renderer_ptr: *mut SDL_Renderer = std::ptr::null_mut();
+    if !unsafe{SDL_CreateWindowAndRenderer(APP_NAME.as_ptr(), (*display_mode).w, (*display_mode).h, SDL_WINDOW_BORDERLESS|SDL_WINDOW_MAXIMIZED|SDL_WINDOW_TRANSPARENT, &mut window_ptr, &mut renderer_ptr)} {
         unsafe{SDL_Log(c"SDL_CreateWindowAndRenderer failed: %s".as_ptr(), SDL_GetError());}
         exit(1);
     }
+    let Some(window) = std::ptr::NonNull::<SDL_Window>::new(window_ptr) else {
+        eprintln!("SDL_CreateWindowAndRenderer returned success but window_ptr is NULL");
+        exit(1);
+    };
+    let Some(renderer) = std::ptr::NonNull::<SDL_Renderer>::new(renderer_ptr) else {
+        eprintln!("SDL_CreateWindowAndRenderer returned success but renderer_ptr is NULL");
+        exit(1);
+    };
     let mut win_w: i32 = 0;
     let mut win_h: i32 = 0;
-    if !unsafe{SDL_GetWindowSize(window, &mut win_w, &mut win_h)} {
+    if !unsafe{SDL_GetWindowSize(window.as_ptr(), &mut win_w, &mut win_h)} {
         unsafe{SDL_Log(c"SDL_GetWindowSize failed: %s".as_ptr(), SDL_GetError());}
         exit(1);
     }
@@ -189,7 +201,7 @@ fn new_state() -> State {
         file_load_path: std::ffi::OsString::new(),
         file_load_initial: true,
         file_load_success: false,
-        file_dialog_semaphore: std::ptr::null_mut(),
+        file_dialog_semaphore: file_dialog_semaphore,
         window: window,
         win_w: win_w,
         win_h: win_h,
@@ -229,7 +241,7 @@ extern "C" fn file_dialog_callback(userdata: *mut std::ffi::c_void, filelist: *c
             // SDL3 provides path as ptr to C str transcoded to UTF8, need to transcode back to platform str
             state.file_load_path = std::ffi::OsString::from(unsafe{std::ffi::CStr::from_ptr(*filelist)}.to_str().expect("failed to decode UTF8 C string from SDL_ShowOpenFileDialog callback"));
             state.filelist.clear();
-            unsafe{SDL_SignalSemaphore(state.file_dialog_semaphore);}
+            unsafe{SDL_SignalSemaphore(state.file_dialog_semaphore.as_ptr());}
         } else {
             eprintln!("SDL_ShowOpenFileDialog returned empty filelist");
             exit(1);
@@ -292,7 +304,7 @@ impl State {
 
     // redraw window contents with current state
     fn render_window(&self) {
-        if !unsafe{SDL_RenderClear(self.renderer)} {
+        if !unsafe{SDL_RenderClear(self.renderer.as_ptr())} {
             unsafe{SDL_Log(c"SDL_RenderClear failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
@@ -331,24 +343,24 @@ impl State {
             view_rect.y -= FRAME_WIDTH_TOP as f32;
             view_rect.w += (FRAME_WIDTH_LEFT + FRAME_WIDTH_RIGHT) as f32;
             view_rect.h += (FRAME_WIDTH_TOP + FRAME_WIDTH_BOTTOM) as f32;
-            if !unsafe{SDL_SetRenderDrawColor(self.renderer, FRAME_COLOR.0, FRAME_COLOR.1, FRAME_COLOR.2, FRAME_COLOR.3)} {
+            if !unsafe{SDL_SetRenderDrawColor(self.renderer.as_ptr(), FRAME_COLOR.0, FRAME_COLOR.1, FRAME_COLOR.2, FRAME_COLOR.3)} {
                 unsafe{SDL_Log(c"SDL_SetRenderDrawColor failed: %s".as_ptr(), SDL_GetError());}
                 exit(1);
             }
-            if !unsafe{SDL_RenderFillRect(self.renderer, &view_rect)} {
+            if !unsafe{SDL_RenderFillRect(self.renderer.as_ptr(), &view_rect)} {
                 unsafe{SDL_Log(c"SDL_RenderFillRect failed: %s".as_ptr(), SDL_GetError());}
                 exit(1);
             }
             view_rect = view_rect_saved;
-            if !unsafe{SDL_SetRenderDrawColor(self.renderer, IMAGE_BACKGROUND_COLOR.0, IMAGE_BACKGROUND_COLOR.1, IMAGE_BACKGROUND_COLOR.2, IMAGE_BACKGROUND_COLOR.3)} {
+            if !unsafe{SDL_SetRenderDrawColor(self.renderer.as_ptr(), IMAGE_BACKGROUND_COLOR.0, IMAGE_BACKGROUND_COLOR.1, IMAGE_BACKGROUND_COLOR.2, IMAGE_BACKGROUND_COLOR.3)} {
                 unsafe{SDL_Log(c"SDL_SetRenderDrawColor failed: %s".as_ptr(), SDL_GetError());}
                 exit(1);
             }
-            if !unsafe{SDL_RenderFillRect(self.renderer, &view_rect)} {
+            if !unsafe{SDL_RenderFillRect(self.renderer.as_ptr(), &view_rect)} {
                 unsafe{SDL_Log(c"SDL_RenderFillRect failed: %s".as_ptr(), SDL_GetError());}
                 exit(1);
             }
-            if !unsafe{SDL_SetRenderDrawColor(self.renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT)} {
+            if !unsafe{SDL_SetRenderDrawColor(self.renderer.as_ptr(), 0, 0, 0, SDL_ALPHA_TRANSPARENT)} {
                 unsafe{SDL_Log(c"SDL_SetRenderDrawColor failed: %s".as_ptr(), SDL_GetError())};
                 exit(1);
             }
@@ -365,12 +377,12 @@ impl State {
         // TODO image-rs image::Frame has dimensions and offsets, suggesting it can be subregion of full image area, but it seems that all 3 decoders currently implementing AnimationDecoder always return pre composed frames with full dimensions and zero offsets
         // API-safe impl would need to clear texture subregion and blit into it
         // use intermediate composed texture or compose directly into window buf? Latter would require re-composing frame starting with last full frame at least if view_rect has changed
-        if !unsafe{SDL_RenderTextureRotated(self.renderer, self.anim_frames[self.anim_cur].texture.as_ptr(), std::ptr::null(), &view_rect, (self.view_rotate_angle_q*90) as f64, std::ptr::null(), if self.view_mirror {if self.view_rotate_angle_q%2==1 {SDL_FLIP_VERTICAL} else {SDL_FLIP_HORIZONTAL}} else {SDL_FLIP_NONE})} {
+        if !unsafe{SDL_RenderTextureRotated(self.renderer.as_ptr(), self.anim_frames[self.anim_cur].texture.as_ptr(), std::ptr::null(), &view_rect, (self.view_rotate_angle_q*90) as f64, std::ptr::null(), if self.view_mirror {if self.view_rotate_angle_q%2==1 {SDL_FLIP_VERTICAL} else {SDL_FLIP_HORIZONTAL}} else {SDL_FLIP_NONE})} {
             unsafe{SDL_Log(c"SDL_RenderTextureRotated failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
         // copy renderer backbuffer to frontbuffer
-        if !unsafe{SDL_RenderPresent(self.renderer)} {
+        if !unsafe{SDL_RenderPresent(self.renderer.as_ptr())} {
             unsafe{SDL_Log(c"SDL_RenderPresent failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
@@ -414,23 +426,23 @@ impl State {
             // TODO better way to handle?
             return std::ptr::null_mut();
         }
-        let surface: *mut SDL_Surface = unsafe{SDL_CreateSurfaceFrom(width as i32, height as i32, SDL_PIXELFORMAT_ABGR8888, image_buffer.as_mut_ptr() as *mut std::ffi::c_void, width as i32*4)};
-        if surface.is_null() {
+        let surface_ptr: *mut SDL_Surface = unsafe{SDL_CreateSurfaceFrom(width as i32, height as i32, SDL_PIXELFORMAT_ABGR8888, image_buffer.as_mut_ptr() as *mut std::ffi::c_void, width as i32*4)};
+        if surface_ptr.is_null() {
             unsafe{SDL_Log(c"SDL_CreateSurfaceFrom failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
         // TODO can fail for very large image, shouldn't crash app, should inform user about limits
-        let texture: *mut SDL_Texture = unsafe{SDL_CreateTextureFromSurface(self.renderer, surface)};
-        if texture.is_null() {
+        let texture_ptr: *mut SDL_Texture = unsafe{SDL_CreateTextureFromSurface(self.renderer.as_ptr(), surface_ptr)};
+        if texture_ptr.is_null() {
             unsafe{SDL_Log(c"SDL_CreateTextureFromSurface failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
-        unsafe{SDL_DestroySurface(surface);}
-        if !unsafe{SDL_SetTextureScaleMode(texture, self.view_zoom_scalemode)} {
+        unsafe{SDL_DestroySurface(surface_ptr);}
+        if !unsafe{SDL_SetTextureScaleMode(texture_ptr, self.view_zoom_scalemode)} {
             unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
-        return texture;
+        return texture_ptr;
     }
 
     fn load_image_anim<'a>(&mut self, decoder: impl image::AnimationDecoder<'a>) {
@@ -570,7 +582,7 @@ impl State {
         let file_name = file_load_path.file_name().expect("failed to get filename from file path");
         // SDL needs UTF8 but in some (exotic) envs filename platform string cannot be losslessly transcoded
         let win_title = file_name.to_string_lossy().into_owned() + WIN_TITLE_TAIL;
-        if !unsafe{SDL_SetWindowTitle(self.window, std::ffi::CString::new(win_title).expect("failed to encode UTF8 C string for SDL_SetWindowTitle").as_ptr())} { // SDL_SetWindowTitle copies str internally
+        if !unsafe{SDL_SetWindowTitle(self.window.as_ptr(), std::ffi::CString::new(win_title).expect("failed to encode UTF8 C string for SDL_SetWindowTitle").as_ptr())} { // SDL_SetWindowTitle copies str internally
             unsafe{SDL_Log(c"SDL_SetWindowTitle failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
@@ -581,19 +593,19 @@ impl State {
     fn set_win_fullscreen(&mut self, win_fullscreen: bool) {
         self.win_fullscreen = win_fullscreen;
         // TODO clear window?
-        if !unsafe{SDL_SetWindowFullscreen(self.window, win_fullscreen)} {
+        if !unsafe{SDL_SetWindowFullscreen(self.window.as_ptr(), win_fullscreen)} {
             unsafe{SDL_Log(c"SDL_SetWindowFullscreen failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
-        if !unsafe{SDL_SyncWindow(self.window)} {
+        if !unsafe{SDL_SyncWindow(self.window.as_ptr())} {
             unsafe{SDL_Log(c"SDL_SyncWindow timed out".as_ptr());}
         }
         // assuming that window size can change because of shell UI
-        if !unsafe{SDL_GetWindowSize(self.window, &mut self.win_w, &mut self.win_h)} {
+        if !unsafe{SDL_GetWindowSize(self.window.as_ptr(), &mut self.win_w, &mut self.win_h)} {
             unsafe{SDL_Log(c"SDL_GetWindowSize failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
-        if !unsafe{SDL_SetRenderDrawColor(self.renderer, 0, 0, 0, if win_fullscreen {SDL_ALPHA_OPAQUE} else {SDL_ALPHA_TRANSPARENT})} {
+        if !unsafe{SDL_SetRenderDrawColor(self.renderer.as_ptr(), 0, 0, 0, if win_fullscreen {SDL_ALPHA_OPAQUE} else {SDL_ALPHA_TRANSPARENT})} {
             unsafe{SDL_Log(c"SDL_SetRenderDrawColor failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
@@ -748,21 +760,16 @@ fn main() {
     match std::env::args_os().nth(1) {
         Some(val) => state.file_load_path = val,
         None => {
-            state.file_dialog_semaphore = unsafe{SDL_CreateSemaphore(0)};
-            if state.file_dialog_semaphore.is_null() {
-                unsafe{SDL_Log(c"SDL_CreateSemaphore failed: %s".as_ptr(), SDL_GetError());}
-                exit(1);
-            }
             // 2-step cast because Rust does not allow cast ref to c_void ptr directly
-            unsafe{SDL_ShowOpenFileDialog(Some(file_dialog_callback), &mut state as *mut _ as *mut std::ffi::c_void, state.window, std::ptr::null(), 0, std::ptr::null(), false);}
-            //unsafe{SDL_WaitSemaphore(state.file_dialog_semaphore);}
+            unsafe{SDL_ShowOpenFileDialog(Some(file_dialog_callback), &mut state as *mut _ as *mut std::ffi::c_void, state.window.as_ptr(), std::ptr::null(), 0, std::ptr::null(), false);}
+            //unsafe{SDL_WaitSemaphore(state.file_dialog_semaphore.as_ptr());}
             // on some platforms incl. Linux with xdg-desktop-portal it requires event loop to call the callback
             // SDL_WaitEvent(NULL) doesn't work here, it won't run loop body until there's actual SDL event
             // TODO events while waiting for dialog? App exit?
             loop {
                 unsafe{SDL_Delay(10);}
                 unsafe{SDL_PumpEvents();}
-                if unsafe{SDL_TryWaitSemaphore(state.file_dialog_semaphore)} {
+                if unsafe{SDL_TryWaitSemaphore(state.file_dialog_semaphore.as_ptr())} {
                     break;
                 }
             }
@@ -830,7 +837,7 @@ fn main() {
                         should_exit_on_lmousebtn_release = true;
                     }
                     SDL_BUTTON_RIGHT => {
-                        unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), CONTEXT_MENU_MSG.as_ptr(), state.window);}
+                        unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), CONTEXT_MENU_MSG.as_ptr(), state.window.as_ptr());}
                     }
                     _ => {}
                 }
@@ -841,7 +848,7 @@ fn main() {
                         if should_exit_on_lmousebtn_release {
                             if state.show_exit_expl {
                                 state.show_exit_expl = false;
-                                unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), EXIT_EXPL_MSG.as_ptr(), state.window);}
+                                unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), EXIT_EXPL_MSG.as_ptr(), state.window.as_ptr());}
                             } else {
                                 exit(0);
                             }
@@ -910,7 +917,7 @@ fn main() {
                         // quit
                         if state.show_exit_expl {
                             state.show_exit_expl = false;
-                            unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), EXIT_EXPL_MSG.as_ptr(), state.window);}
+                            unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), EXIT_EXPL_MSG.as_ptr(), state.window.as_ptr());}
                         } else {
                             exit(0);
                         }
