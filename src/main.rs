@@ -84,7 +84,7 @@ struct Frame {
     // SDL_Surface represents pixmap which is owned by process (in RAM), used for software manipulation and rendering
     // SDL_Texture represents "texture" entity owned by GPU driver (usually in VRAM), used for hardware accelerated rendering
     // image file is first decoded to buffer which is passed to SDL_CreateSurfaceFrom() to get SDL_Surface, which is then used to upload it to GPU and get SDL_Texture via SDL_CreateTextureFromSurface(), before freeing SDL_Surface and buffer
-    texture: *mut SDL_Texture,
+    texture: std::ptr::NonNull<SDL_Texture>,
     //width: i32,
     //height: i32,
     //x_offset: i32,
@@ -94,7 +94,7 @@ struct Frame {
 
 impl Drop for Frame {
     fn drop(&mut self) {
-        unsafe{SDL_DestroyTexture(self.texture);} // frame texture ptr always valid, frame only pushed to vec if SDL_CreateTextureFromSurface() succeeds
+        unsafe{SDL_DestroyTexture(self.texture.as_ptr());} // frame texture ptr always valid, frame only pushed to vec if SDL_CreateTextureFromSurface() succeeds
     }
 }
 
@@ -365,7 +365,7 @@ impl State {
         // TODO image-rs image::Frame has dimensions and offsets, suggesting it can be subregion of full image area, but it seems that all 3 decoders currently implementing AnimationDecoder always return pre composed frames with full dimensions and zero offsets
         // API-safe impl would need to clear texture subregion and blit into it
         // use intermediate composed texture or compose directly into window buf? Latter would require re-composing frame starting with last full frame at least if view_rect has changed
-        if !unsafe{SDL_RenderTextureRotated(self.renderer, self.anim_frames[self.anim_cur].texture, std::ptr::null(), &view_rect, (self.view_rotate_angle_q*90) as f64, std::ptr::null(), if self.view_mirror {if self.view_rotate_angle_q%2==1 {SDL_FLIP_VERTICAL} else {SDL_FLIP_HORIZONTAL}} else {SDL_FLIP_NONE})} {
+        if !unsafe{SDL_RenderTextureRotated(self.renderer, self.anim_frames[self.anim_cur].texture.as_ptr(), std::ptr::null(), &view_rect, (self.view_rotate_angle_q*90) as f64, std::ptr::null(), if self.view_mirror {if self.view_rotate_angle_q%2==1 {SDL_FLIP_VERTICAL} else {SDL_FLIP_HORIZONTAL}} else {SDL_FLIP_NONE})} {
             unsafe{SDL_Log(c"SDL_RenderTextureRotated failed: %s".as_ptr(), SDL_GetError());}
             exit(1);
         }
@@ -405,6 +405,34 @@ impl State {
         self.set_init_orient(exif_orientation);
     }
 
+    fn load_image_texture(&self, mut image_buffer: image::RgbaImage) -> *mut SDL_Texture {
+        let (width, height) = image_buffer.dimensions();
+        if width>i32::MAX as u32/4 || (height!=0 && width*4>i32::MAX as u32/height) || (width*height) as usize>image_buffer.len() {
+            if self.file_load_initial && self.anim_frames.len()==0 {
+                eprintln!("bad image dimensions or buffer length");
+            }
+            // TODO better way to handle?
+            return std::ptr::null_mut();
+        }
+        let surface: *mut SDL_Surface = unsafe{SDL_CreateSurfaceFrom(width as i32, height as i32, SDL_PIXELFORMAT_ABGR8888, image_buffer.as_mut_ptr() as *mut std::ffi::c_void, width as i32*4)};
+        if surface.is_null() {
+            unsafe{SDL_Log(c"SDL_CreateSurfaceFrom failed: %s".as_ptr(), SDL_GetError());}
+            exit(1);
+        }
+        // TODO can fail for very large image, shouldn't crash app, should inform user about limits
+        let texture: *mut SDL_Texture = unsafe{SDL_CreateTextureFromSurface(self.renderer, surface)};
+        if texture.is_null() {
+            unsafe{SDL_Log(c"SDL_CreateTextureFromSurface failed: %s".as_ptr(), SDL_GetError());}
+            exit(1);
+        }
+        unsafe{SDL_DestroySurface(surface);}
+        if !unsafe{SDL_SetTextureScaleMode(texture, self.view_zoom_scalemode)} {
+            unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
+            exit(1);
+        }
+        return texture;
+    }
+
     fn load_image_anim<'a>(&mut self, decoder: impl image::AnimationDecoder<'a>) {
         let frames = decoder.into_frames();
         for frame in frames {
@@ -421,30 +449,7 @@ impl State {
                 }
                 break;
             }
-            let buffer = frame.into_buffer();
-            let (width, height) = buffer.dimensions();
-            let mut raw = buffer.into_raw();
-            if width>i32::MAX as u32/4 || (height!=0 && width*4>i32::MAX as u32/height) || (width*4*height) as usize>raw.len() {
-                if self.file_load_initial && self.anim_frames.len()==0 {
-                    eprintln!("bad image dimensions");
-                }
-                break;
-            }
-            let surface: *mut SDL_Surface = unsafe{SDL_CreateSurfaceFrom(width as i32, height as i32, SDL_PIXELFORMAT_ABGR8888, raw.as_mut_ptr() as *mut std::ffi::c_void, width as i32*4)};
-            if surface.is_null() {
-                unsafe{SDL_Log(c"SDL_CreateSurfaceFrom failed: %s".as_ptr(), SDL_GetError());}
-                exit(1);
-            }
-            let texture: *mut SDL_Texture = unsafe{SDL_CreateTextureFromSurface(self.renderer, surface)};
-            if texture.is_null() {
-                unsafe{SDL_Log(c"SDL_CreateTextureFromSurface failed: %s".as_ptr(), SDL_GetError());}
-                exit(1);
-            }
-            unsafe{SDL_DestroySurface(surface);}
-            if !unsafe{SDL_SetTextureScaleMode(texture, self.view_zoom_scalemode)} {
-                unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
-                exit(1);
-            }
+            let Some(texture) = std::ptr::NonNull::<SDL_Texture>::new(self.load_image_texture(frame.into_buffer())) else {break;};
             self.anim_frames.push(Frame {
                 texture: texture,
                 delay: (delay_numer_ms / delay_denom_ms) as u64
@@ -459,30 +464,7 @@ impl State {
             }
             return;
         };
-        let rgba8 = image_.to_rgba8();
-        let (width, height) = (rgba8.width(), rgba8.height());
-        let mut raw = rgba8.into_raw();
-        if width>i32::MAX as u32/4 || (height!=0 && width*4>i32::MAX as u32/height) || (width*4*height) as usize>raw.len() {
-            if self.file_load_initial {
-                eprintln!("bad image dimensions");
-            }
-            return;
-        }
-        let surface: *mut SDL_Surface = unsafe{SDL_CreateSurfaceFrom(width as i32, height as i32, SDL_PIXELFORMAT_ABGR8888, raw.as_mut_ptr() as *mut std::ffi::c_void, width as i32*4)};
-        if surface.is_null() {
-            unsafe{SDL_Log(c"SDL_CreateSurfaceFrom failed: %s".as_ptr(), SDL_GetError());}
-            exit(1);
-        }
-        let texture = unsafe{SDL_CreateTextureFromSurface(self.renderer, surface)};
-        if texture.is_null() {
-            unsafe{SDL_Log(c"SDL_CreateTextureFromSurface failed: %s".as_ptr(), SDL_GetError());}
-            exit(1);
-        }
-        unsafe{SDL_DestroySurface(surface);}
-        if !unsafe{SDL_SetTextureScaleMode(texture, self.view_zoom_scalemode)} {
-            unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
-            exit(1);
-        }
+        let Some(texture) = std::ptr::NonNull::<SDL_Texture>::new(self.load_image_texture(image_.to_rgba8())) else {return;};
         self.anim_frames.push(Frame {
             texture: texture,
             delay: 0
@@ -906,7 +888,7 @@ fn main() {
                         // switch scalemode
                         state.view_zoom_scalemode = if state.view_zoom_scalemode==SDL_SCALEMODE_NEAREST {SDL_SCALEMODE_LINEAR} else {SDL_SCALEMODE_NEAREST};
                         for frame in &state.anim_frames {
-                            if !unsafe{SDL_SetTextureScaleMode(frame.texture, state.view_zoom_scalemode)} {
+                            if !unsafe{SDL_SetTextureScaleMode(frame.texture.as_ptr(), state.view_zoom_scalemode)} {
                                 unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
                                 exit(1);
                             }
