@@ -136,6 +136,7 @@ struct State {
     view_zoom_scalemode: SDL_ScaleMode,
     view_rotate_angle_q: i32, // 1/4-turns
     view_mirror: bool,
+    view_equalize_outer_space: bool,
     filelist: Vec<std::ffi::OsString>, // list of filenames in dir
     filelist_cur: usize, // index of filelist item name of which is currently pointed by state.file_load_path
     anim_frames: Vec<Frame>,
@@ -219,6 +220,7 @@ fn new_state() -> State {
         view_zoom_scalemode: SCALEMODE,
         view_rotate_angle_q: 0,
         view_mirror: false,
+        view_equalize_outer_space: false,
         filelist: Vec::<std::ffi::OsString>::new(),
         filelist_cur: 0,
         anim_frames: Vec::<Frame>::new(),
@@ -613,7 +615,7 @@ impl State {
 
     // ok with transformed (mirrored and rotated) view; img_cur coords do not match real img coords under cursor, but visual result is same; however preserving image point under cursor during view transformation will require transformation of saved coords
 
-    // coords of img point currently at selected win point, i. e. translation of win coords to img coords
+    // coords of img point currently at selected win point, i. e. translate win coords to img coords
     fn select_img_point_at_selected_win_point(&mut self) {
         self.img_sel_x = (self.win_sel_x - self.view_rect.x) / self.view_zoom_scale;
         self.img_sel_y = (self.win_sel_y - self.view_rect.y) / self.view_zoom_scale;
@@ -630,9 +632,54 @@ impl State {
         self.select_img_point_at_selected_win_point();
     }
 
-    fn move_to_place_selected_img_point_at_selected_win_point(&mut self) {
+    fn move_to_return_selected_img_point_to_selected_win_point(&mut self) {
         self.view_rect.x = self.win_sel_x - self.img_sel_x * self.view_zoom_scale;
         self.view_rect.y = self.win_sel_y - self.img_sel_y * self.view_zoom_scale;
+    }
+
+    // if there is wider outer space on any side of view rect in win than on opposite side, move view rect in the direction of that side to nearest pos in which outer space width on both sides is equal
+    // applied if equalize_outer_space enabled and not lmousebtn_pressed
+    // TODO parametrize for elastic anim
+    // TODO for rotated currently can produce 1px of free space when aligning by right side or bottom because of flooring in render_window()
+    fn move_to_equalize_outer_space(&mut self) {
+        // rotate
+        if self.view_rotate_angle_q%2==1 {
+            self.view_rect.x += (self.view_rect.w - self.view_rect.h) / 2.;
+            self.view_rect.y += (self.view_rect.h - self.view_rect.w) / 2.;
+            (self.view_rect.w, self.view_rect.h) = (self.view_rect.h, self.view_rect.w);
+        }
+        // view w <> win w
+        if self.view_rect.w < self.win_w as f32 {
+            // view narrower: center
+            self.view_rect.x = (self.win_w as f32 - self.view_rect.w) / 2.;
+        } else {
+            if self.view_rect.x > 0. {
+                // view wider and there's empty space on the left: align by left side
+                self.view_rect.x = 0.;
+                // view wider and there's empty space on the right: align by right side
+            } else if self.view_rect.x+self.view_rect.w < self.win_w as f32 {
+                self.view_rect.x = self.win_w as f32 - self.view_rect.w;
+            }
+        }
+        // view h <> win h
+        if self.view_rect.h < self.win_h as f32 {
+            // view h less: center
+            self.view_rect.y = (self.win_h as f32 - self.view_rect.h) / 2.;
+        } else {
+            if self.view_rect.y > 0. {
+                // view h greater and there's free space above: align by top
+                self.view_rect.y = 0.;
+            } else if self.view_rect.y+self.view_rect.h < self.win_h as f32 {
+                // view h greater and there's free space below: align by bottom
+                self.view_rect.y = self.win_h as f32 - self.view_rect.h;
+            }
+        }
+        // rotate
+        if self.view_rotate_angle_q%2==1 {
+            self.view_rect.x += (self.view_rect.w - self.view_rect.h) / 2.;
+            self.view_rect.y += (self.view_rect.h - self.view_rect.w) / 2.;
+            (self.view_rect.w, self.view_rect.h) = (self.view_rect.h, self.view_rect.w);
+        }
     }
 
     // mouse and keyboard zoom, into selected point(s), behaviour depends on selected point(s)
@@ -641,18 +688,21 @@ impl State {
             self.set_win_fullscreen(false);
         }
         self.set_zoom_level(view_zoom_level);
-        self.move_to_place_selected_img_point_at_selected_win_point();
+        self.move_to_return_selected_img_point_to_selected_win_point();
+        if self.view_equalize_outer_space {
+            self.move_to_equalize_outer_space();
+        }
         self.render_window();
     }
 
     // mouse pan
-    fn view_move_to_place_selected_img_point_at_selected_win_point(&mut self) {
+    fn view_move_to_return_selected_img_point_to_selected_win_point(&mut self) {
         // ignore new motion events until current one is processed (to prevent accumulation of events in queue and image movement lag behind cursor which can happen if app has to redraw for each motion event)
         unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), false);}
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
         }
-        self.move_to_place_selected_img_point_at_selected_win_point();
+        self.move_to_return_selected_img_point_to_selected_win_point();
         self.render_window();
         unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), true);}
     }
@@ -664,6 +714,9 @@ impl State {
         }
         self.view_rect.x += x;
         self.view_rect.y += y;
+        if self.view_equalize_outer_space {
+            self.move_to_equalize_outer_space();
+        }
         self.render_window();
     }
 
@@ -811,19 +864,25 @@ fn main() {
         match event.event_type() {
             SDL_EVENT_MOUSE_WHEEL => {
                 if unsafe{event.wheel}.y != 0. {
+                    // TODO these are because rendering currently happens inside view zoom fn and I don't want to leak input state into it; will likely be solved with refactoring of render loop with moving render_window call from event handlers to single place in the loop after handling all events enqueued since last display refresh; and with addition of elastic animation with which view rect will be always rendered at initial pos before moving it to equalized pos; here only scheduling of the animation will happen
+                    // TODO ugly equalize_outer_space switching
+                    let view_equalize_outer_space_saved = state.view_equalize_outer_space;
                     // if lmousebtn_pressed, use cur coords saved at start of mouse pan op
                     if !lmousebtn_pressed {
                         state.select_win_and_img_points_under_cursor();
+                    } else {
+                        state.view_equalize_outer_space = false;
                     }
                     state.view_zoom(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1});
                     should_exit_on_lmousebtn_release = false;
+                    state.view_equalize_outer_space = view_equalize_outer_space_saved;
                 }
             }
             SDL_EVENT_MOUSE_MOTION => {
                 if lmousebtn_pressed {
                     state.win_sel_x = unsafe{event.motion}.x;
                     state.win_sel_y = unsafe{event.motion}.y;
-                    state.view_move_to_place_selected_img_point_at_selected_win_point();
+                    state.view_move_to_return_selected_img_point_to_selected_win_point();
                     should_exit_on_lmousebtn_release = false;
                 }
             }
@@ -854,6 +913,10 @@ fn main() {
                             }
                         }
                         lmousebtn_pressed = false;
+                        if state.view_equalize_outer_space {
+                            state.move_to_equalize_outer_space();
+                            state.render_window();
+                        }
                     }
                     SDL_BUTTON_MIDDLE => {
                         state.set_win_fullscreen(!state.win_fullscreen);
@@ -865,6 +928,14 @@ fn main() {
             SDL_EVENT_KEY_DOWN => {
                 //eprintln!{"key scancode: {}", unsafe{event.key}.scancode);}
                 match unsafe{event.key}.scancode {
+                    SDL_SCANCODE_E => {
+                        // toggle equalize outer space
+                        state.view_equalize_outer_space = !state.view_equalize_outer_space;
+                        if state.view_equalize_outer_space {
+                            state.move_to_equalize_outer_space();
+                            state.render_window();
+                        }
+                    }
                     SDL_SCANCODE_F |
                     SDL_SCANCODE_F11 => {
                         // toggle fullscreen
@@ -874,6 +945,9 @@ fn main() {
                     SDL_SCANCODE_L => {
                         // rotate counter clockwise
                         state.view_rotate_angle_q = (state.view_rotate_angle_q + (if state.view_mirror {1} else {3})) % 4;
+                        if state.view_equalize_outer_space {
+                            state.move_to_equalize_outer_space();
+                        }
                         state.render_window();
                     }
                     SDL_SCANCODE_M => {
@@ -889,6 +963,9 @@ fn main() {
                     SDL_SCANCODE_R => {
                         // rotate clockwise
                         state.view_rotate_angle_q = (state.view_rotate_angle_q + (if state.view_mirror {3} else {1})) % 4;
+                        if state.view_equalize_outer_space {
+                            state.move_to_equalize_outer_space();
+                        }
                         state.render_window();
                     }
                     SDL_SCANCODE_S => {
@@ -905,12 +982,16 @@ fn main() {
                     SDL_SCANCODE_0 |
                     SDL_SCANCODE_KP_0 => {
                         // zoom 1:1
+                        // TODO ugly equalize_outer_space switching
+                        let view_equalize_outer_space_saved = state.view_equalize_outer_space;
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
+                            state.view_equalize_outer_space = false;
                         } else {
                             state.select_win_and_img_points_in_center();
                         }
                         state.view_zoom(0);
+                        state.view_equalize_outer_space = view_equalize_outer_space_saved;
                     }
                     SDL_SCANCODE_RETURN |
                     SDL_SCANCODE_KP_ENTER => {
@@ -934,22 +1015,30 @@ fn main() {
                     SDL_SCANCODE_MINUS |
                     SDL_SCANCODE_KP_MINUS => {
                         // zoom out
+                        // TODO ugly equalize_outer_space switching
+                        let view_equalize_outer_space_saved = state.view_equalize_outer_space;
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
+                            state.view_equalize_outer_space = false;
                         } else {
                             state.select_win_and_img_points_in_center();
                         }
                         state.view_zoom(state.view_zoom_level-1);
+                        state.view_equalize_outer_space = view_equalize_outer_space_saved;
                     }
                     SDL_SCANCODE_EQUALS |
                     SDL_SCANCODE_KP_PLUS => {
                         // zoom in
+                        // TODO ugly equalize_outer_space switching
+                        let view_equalize_outer_space_saved = state.view_equalize_outer_space;
                         if lmousebtn_pressed {
                             should_exit_on_lmousebtn_release = false;
+                            state.view_equalize_outer_space = false;
                         } else {
                             state.select_win_and_img_points_in_center();
                         }
                         state.view_zoom(state.view_zoom_level+1);
+                        state.view_equalize_outer_space = view_equalize_outer_space_saved;
                     }
                     SDL_SCANCODE_PAGEUP |
                     SDL_SCANCODE_KP_9 => {
