@@ -834,40 +834,10 @@ fn main() {
     let mut event: SDL_Event = SDL_Event::default();
     let mut lmousebtn_pressed = false;
     let mut should_exit_on_lmousebtn_release = false;
-    let mut render_in_prev_iter = true; // controls whether to use non blocking PollEvent or blocking WaitEvent
-    let mut render_in_this_iter = false; // controls whether to render in the end of iteration or not; switched to true by any handler which changes state in a way which possibly requires redraw; switched back to false after rendering before continuing to next iteration
     loop {
-        let now = unsafe{SDL_GetTicks()};
-        let anim_playback = !(state.anim_frames.len()<2 || state.anim_paused);
-        // handle all events before (possibly) rendering
-        loop {
-            if !render_in_prev_iter {
-                // WaitForEvent(OrTimeout) blocks/pauses loop until event (or timeout) happens
-                if !anim_playback {
-                    // event = WaitForEvent
-                    if !unsafe{SDL_WaitEvent(&mut event)} {
-                        unsafe{SDL_Log(c"SDL_WaitEvent failed: %s".as_ptr(), SDL_GetError());}
-                        exit(1);
-                    }
-                } else {
-                    // event|timeout = WaitForEventOrTimeout
-                    // TODO type mismatch: SDL_GetTicks() returns ms as u32 but SDL_WaitEventTimeout() takes ms as i32
-                    if state.anim_next_frame_time<now || !unsafe{SDL_WaitEventTimeout(&mut event, (state.anim_next_frame_time-now) as i32)} {
-                        // timeout
-                        // anim frame will be switched just before render, this is just to guaranteedly wake up loop in time even if it won't be woken by anything else
-                        // event queue is empty
-                        break;
-                    }
-                }
-            } else {
-                // event|None = PollEvent
-                if !unsafe{SDL_PollEvent(&mut event)} {
-                    // None
-                    // event queue is empty
-                    break;
-                }
-            }
-            // handle event; if needed set render_in_this_iter = true
+        let mut render_needed = false;
+        // handle all enqueued events before (possibly) rendering
+        while unsafe{SDL_PollEvent(&mut event)} {
             match event.event_type() {
                 SDL_EVENT_MOUSE_WHEEL => {
                     if unsafe{event.wheel}.y != 0. {
@@ -880,7 +850,7 @@ fn main() {
                         if !lmousebtn_pressed && state.view_equalize_outer_space {
                             state.move_to_equalize_outer_space();
                         }
-                        render_in_this_iter = true;
+                        render_needed = true;
                     }
                 }
                 SDL_EVENT_MOUSE_MOTION => {
@@ -888,7 +858,7 @@ fn main() {
                         state.win_sel_x = unsafe{event.motion}.x;
                         state.win_sel_y = unsafe{event.motion}.y;
                         state.view_move_to_return_selected_img_point_to_selected_win_point();
-                        render_in_this_iter = true;
+                        render_needed = true;
                         should_exit_on_lmousebtn_release = false;
                     }
                 }
@@ -921,12 +891,12 @@ fn main() {
                             lmousebtn_pressed = false;
                             if state.view_equalize_outer_space {
                                 state.move_to_equalize_outer_space();
-                                render_in_this_iter = true;
+                                render_needed = true;
                             }
                         }
                         SDL_BUTTON_MIDDLE => {
                             state.set_win_fullscreen(!state.win_fullscreen);
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         _ => {}
                     }
@@ -939,14 +909,14 @@ fn main() {
                             state.view_equalize_outer_space = !state.view_equalize_outer_space;
                             if !lmousebtn_pressed && state.view_equalize_outer_space {
                                 state.move_to_equalize_outer_space();
-                                render_in_this_iter = true;
+                                render_needed = true;
                             }
                         }
                         SDL_SCANCODE_F |
                         SDL_SCANCODE_F11 => {
                             // toggle fullscreen
                             state.set_win_fullscreen(!state.win_fullscreen);
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_L => {
                             // rotate counter clockwise
@@ -954,12 +924,12 @@ fn main() {
                             if !lmousebtn_pressed && state.view_equalize_outer_space {
                                 state.move_to_equalize_outer_space();
                             }
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_M => {
                             // mirror horizontally
                             state.view_mirror = !state.view_mirror;
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_Q |
                         SDL_SCANCODE_ESCAPE => {
@@ -972,7 +942,7 @@ fn main() {
                             if !lmousebtn_pressed && state.view_equalize_outer_space {
                                 state.move_to_equalize_outer_space();
                             }
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_S => {
                             // switch scalemode
@@ -983,7 +953,7 @@ fn main() {
                                     exit(1);
                                 }
                             }
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_0 |
                         SDL_SCANCODE_KP_0 => {
@@ -997,7 +967,7 @@ fn main() {
                             if !lmousebtn_pressed && state.view_equalize_outer_space {
                                 state.move_to_equalize_outer_space();
                             }
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_RETURN |
                         SDL_SCANCODE_KP_ENTER => {
@@ -1030,7 +1000,7 @@ fn main() {
                             if !lmousebtn_pressed && state.view_equalize_outer_space {
                                 state.move_to_equalize_outer_space();
                             }
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_EQUALS |
                         SDL_SCANCODE_KP_PLUS => {
@@ -1044,46 +1014,44 @@ fn main() {
                             if !lmousebtn_pressed && state.view_equalize_outer_space {
                                 state.move_to_equalize_outer_space();
                             }
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         // load image calls render_window() immediately
                         SDL_SCANCODE_PAGEUP |
                         SDL_SCANCODE_KP_9 => {
                             // prev
                             state.load_next_image(true);
-                            render_in_prev_iter = true;
-                            render_in_this_iter = false;
+                            render_needed = false;
                         }
                         SDL_SCANCODE_PAGEDOWN |
                         SDL_SCANCODE_KP_3 => {
                             // next
                             state.load_next_image(false);
-                            render_in_prev_iter = true;
-                            render_in_this_iter = false;
+                            render_needed = false;
                         }
                         SDL_SCANCODE_RIGHT |
                         SDL_SCANCODE_KP_6 => {
                             // move right
                             state.view_move_by_offset(-KEYBOARD_PAN_DELTA, 0.);
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_LEFT |
                         SDL_SCANCODE_KP_4 => {
                             // move left
                             state.view_move_by_offset(KEYBOARD_PAN_DELTA, 0.);
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_DOWN |
                         SDL_SCANCODE_KP_2 => {
                             // move down
                             state.view_move_by_offset(0., -KEYBOARD_PAN_DELTA);
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         SDL_SCANCODE_UP |
                         SDL_SCANCODE_KP_8 => {
                             // move up
                             state.view_move_by_offset(0., KEYBOARD_PAN_DELTA);
-                            render_in_this_iter = true;
+                            render_needed = true;
                         }
                         _ => {}
                     }
@@ -1093,25 +1061,33 @@ fn main() {
                 }
                 _ => {}
             }
-            if !render_in_prev_iter {
-                // event queue is empty
-                break;
-            }
-
         }
         // also switch to next anim frame if needed
+        let anim_playback = !(state.anim_frames.len()<2 || state.anim_paused);
+        let now = unsafe{SDL_GetTicks()};
         if anim_playback && state.anim_next_frame_time < now {
             while state.anim_next_frame_time < now {
                 state.anim_cur = (state.anim_cur + 1) % state.anim_frames.len();
                 state.anim_next_frame_time += state.anim_frames[state.anim_cur].delay;
             }
-            render_in_this_iter = true;
+            render_needed = true;
         }
-        if render_in_this_iter {
+        if render_needed {
             state.render_window(); // blocks/pauses loop until frame is displayed
+        } else if anim_playback {
+            // WaitForEvent(OrTimeout) blocks/pauses loop until event (or timeout) happens
+            // it can be passed event ptr to pop event from queue immediately, but we pass null to only use it for waiting and handle event queue in the beginning
+            // TODO type mismatch: SDL_GetTicks() returns ms as u32 but SDL_WaitEventTimeout() takes ms as i32
+            if !(state.anim_next_frame_time<now) {
+                unsafe{SDL_WaitEventTimeout(std::ptr::null_mut(), (state.anim_next_frame_time-now) as i32);}
+                // timeout
+                // anim frame will be switched just before render, this is just to guaranteedly wake up loop in time even if it won't be woken by anything else
+            }
+        } else {
+            if !unsafe{SDL_WaitEvent(std::ptr::null_mut())} {
+                unsafe{SDL_Log(c"SDL_WaitEvent failed: %s".as_ptr(), SDL_GetError());}
+                exit(1);
+            }
         }
-        // for next iteration
-        render_in_prev_iter = render_in_this_iter;
-        render_in_this_iter = false;
     }
 }
