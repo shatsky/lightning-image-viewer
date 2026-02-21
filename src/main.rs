@@ -56,9 +56,8 @@ image files from file manager to use it as intended.";
 
 // design notes
 // - state obj holds (most of) persistent state incl. view_rect which defines current image size and position on display
-// - view_* functions redraw via render_window()
-// - event loop in main()
-// - both still and anim images are treated as vec of frames; still image vec has single frame with delay=0; anim playback code in event loop is skipped if vec len<2
+// - event&rendering loop in main(); first, events are handled (in nested loop which can wait if event queue is empty or run multiple times if there are multiple events in queue), then the animation clock; if during handling something has set render flag, rendering happens; however, image load (initial or prev/next switch) currently causes immediate rendering via view_reset (before all view_* functions caused immediate rendering)
+// - both still and anim images are treated as vec of frames; still image vec has single frame with delay=0; anim playback code in event&rendering loop is skipped if vec len<2 or anim_paused
 // - if orientation (rotate and mirror) metadata is provided by decoder, pixmap is not rotated in mem but loaded to texture as is; orientation metadata is used to set initial orientation state values, which are used in rendering call in render_window(); view_rect is not rotated as per orientation state, too; SDL renderer takes non rotated rect with separate rotation angle arg and renders texture rotated
 // - view_rect is copied in render_window() and copy is adjusted (pos coords floored to align to display pixels) and used for rendering call
 // - for view transforming ops which preserve certain image point pos (under cursor or in center), win and img coords of "selected point" are saved in state, then used to move view_rect pos to align img selected point to win selected point
@@ -67,7 +66,7 @@ image files from file manager to use it as intended.";
 // - rewrite from C, intentionally close to original C source; I don't like sdl3-rs discarding SDL original entity naming, using unsafe sdl3-sys for now
 // - things with process lifetimes incl. SDL window and renderer are not managed, exit() and rely on OS to clean up; why not?
 // - SDL_CreateTextureFromSurface and SDL_SetWindowTitle don't need surface and str after call, ok to drop immediately
-// - I prefer explicit SDL event loop
+// - I prefer explicit SDL event&rendering loop
 
 // TODO print errors provided in Result enums when loading image, incl. partial anim load
 // TODO atomic image view state, in image_load() create new and replace/switch upon success, loaded_images vec for cache/preload?
@@ -190,6 +189,10 @@ fn new_state() -> State {
     let mut win_h: i32 = 0;
     if !unsafe{SDL_GetWindowSize(window.as_ptr(), &mut win_w, &mut win_h)} {
         unsafe{SDL_Log(c"SDL_GetWindowSize failed: %s".as_ptr(), SDL_GetError());}
+        exit(1);
+    }
+    if !unsafe{SDL_SetRenderVSync(renderer.as_ptr(), 1)} {
+        unsafe{SDL_Log(c"SDL_SetRenderVSync failed: %s".as_ptr(), SDL_GetError());}
         exit(1);
     }
     // TODO This function is available since SDL 3.4.0.
@@ -490,7 +493,7 @@ impl State {
         self.file_load_success = false;
 
         // free previous if loaded
-        // after this we can't render until we load an image again; should be ok for single threaded program in which code which calls load_image() does not pass control to event loop until image is loaded successfully
+        // after this we can't render until we load an image again; should be ok for single threaded program in which code which calls load_image() does not pass control to event&rendering loop until image is loaded successfully
         self.anim_frames.clear();
 
         let Ok(file) = std::fs::File::open(&self.file_load_path) else {
@@ -689,22 +692,14 @@ impl State {
         }
         self.set_zoom_level(view_zoom_level);
         self.move_to_return_selected_img_point_to_selected_win_point();
-        if self.view_equalize_outer_space {
-            self.move_to_equalize_outer_space();
-        }
-        self.render_window();
     }
 
     // mouse pan
     fn view_move_to_return_selected_img_point_to_selected_win_point(&mut self) {
-        // ignore new motion events until current one is processed (to prevent accumulation of events in queue and image movement lag behind cursor which can happen if app has to redraw for each motion event)
-        unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), false);}
         if self.win_fullscreen {
             self.set_win_fullscreen(false);
         }
         self.move_to_return_selected_img_point_to_selected_win_point();
-        self.render_window();
-        unsafe{SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION.into(), true);}
     }
 
     // keyboard pan
@@ -714,10 +709,10 @@ impl State {
         }
         self.view_rect.x += x;
         self.view_rect.y += y;
+        // TODO uniform with other ops?
         if self.view_equalize_outer_space {
             self.move_to_equalize_outer_space();
         }
-        self.render_window();
     }
 
     // prev/next image switch
@@ -835,76 +830,178 @@ fn main() {
         exit(1);
     }
     state.file_load_initial = false;
+    // event&rendering loop
     let mut event: SDL_Event = SDL_Event::default();
     let mut lmousebtn_pressed = false;
     let mut should_exit_on_lmousebtn_release = false;
-    let mut now: u64;
+    let mut render_in_prev_iter = true; // controls whether to use non blocking PollEvent or blocking WaitEvent
+    let mut render_in_this_iter = false; // controls whether to render in the end of iteration or not; switched to true by any handler which changes state in a way which possibly requires redraw; switched back to false after rendering before continuing to next iteration
     loop {
-        if state.anim_frames.len()<2 || state.anim_paused {
-            if !unsafe{SDL_WaitEvent(&mut event)} {
-                unsafe{SDL_Log(c"SDL_WaitEvent failed: %s".as_ptr(), SDL_GetError());}
-                break;
-            }
-        } else {
-            // anim
-            now = unsafe{SDL_GetTicks()};
-            // if next frame time missed or if event queue empty and next frame time arrives before event while waiting for event or next frame time
-            // TODO type mismatch: SDL_GetTicks() returns ms as u32 but SDL_WaitEventTimeout() takes ms as i32
-            if state.anim_next_frame_time<now ||
-               !unsafe{SDL_WaitEventTimeout(&mut event, (state.anim_next_frame_time-now) as i32)} {
-                state.anim_cur = (state.anim_cur + 1) % state.anim_frames.len();
-                // display next frame if in time, else skip
-                if state.anim_next_frame_time >= now as u64 {
-                    state.render_window();
-                }
-                state.anim_next_frame_time += state.anim_frames[state.anim_cur].delay;
-                continue;
-            }
-        }
-        match event.event_type() {
-            SDL_EVENT_MOUSE_WHEEL => {
-                if unsafe{event.wheel}.y != 0. {
-                    // TODO these are because rendering currently happens inside view zoom fn and I don't want to leak input state into it; will likely be solved with refactoring of render loop with moving render_window call from event handlers to single place in the loop after handling all events enqueued since last display refresh; and with addition of elastic animation with which view rect will be always rendered at initial pos before moving it to equalized pos; here only scheduling of the animation will happen
-                    // TODO ugly equalize_outer_space switching
-                    let view_equalize_outer_space_saved = state.view_equalize_outer_space;
-                    // if lmousebtn_pressed, use cur coords saved at start of mouse pan op
-                    if !lmousebtn_pressed {
-                        state.select_win_and_img_points_under_cursor();
-                    } else {
-                        state.view_equalize_outer_space = false;
+        let now = unsafe{SDL_GetTicks()};
+        let anim_playback = !(state.anim_frames.len()<2 || state.anim_paused);
+        // handle all events before (possibly) rendering
+        loop {
+            if !render_in_prev_iter {
+                // WaitForEvent(OrTimeout) blocks/pauses loop until event (or timeout) happens
+                if !anim_playback {
+                    // event = WaitForEvent
+                    if !unsafe{SDL_WaitEvent(&mut event)} {
+                        unsafe{SDL_Log(c"SDL_WaitEvent failed: %s".as_ptr(), SDL_GetError());}
+                        exit(1);
                     }
-                    state.view_zoom(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1});
-                    should_exit_on_lmousebtn_release = false;
-                    state.view_equalize_outer_space = view_equalize_outer_space_saved;
-                }
-            }
-            SDL_EVENT_MOUSE_MOTION => {
-                if lmousebtn_pressed {
-                    state.win_sel_x = unsafe{event.motion}.x;
-                    state.win_sel_y = unsafe{event.motion}.y;
-                    state.view_move_to_return_selected_img_point_to_selected_win_point();
-                    should_exit_on_lmousebtn_release = false;
-                }
-            }
-            // TODO type mismatch: SDL_Event.button.button is u8 but SDL_BUTTON_* constants are i32
-            // also it's not allowed to use `as` in match patterns
-            SDL_EVENT_MOUSE_BUTTON_DOWN => {
-                match unsafe{event.button}.button as i32 {
-                    SDL_BUTTON_LEFT => {
-                        lmousebtn_pressed = true;
-                        state.select_win_and_img_points_under_cursor();
-                        should_exit_on_lmousebtn_release = true;
+                } else {
+                    // event|timeout = WaitForEventOrTimeout
+                    // TODO type mismatch: SDL_GetTicks() returns ms as u32 but SDL_WaitEventTimeout() takes ms as i32
+                    if state.anim_next_frame_time<now || !unsafe{SDL_WaitEventTimeout(&mut event, (state.anim_next_frame_time-now) as i32)} {
+                        // timeout
+                        // anim frame will be switched just before render, this is just to guaranteedly wake up loop in time even if it won't be woken by anything else
+                        // event queue is empty
+                        break;
                     }
-                    SDL_BUTTON_RIGHT => {
-                        unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), CONTEXT_MENU_MSG.as_ptr(), state.window.as_ptr());}
-                    }
-                    _ => {}
+                }
+            } else {
+                // event|None = PollEvent
+                if !unsafe{SDL_PollEvent(&mut event)} {
+                    // None
+                    // event queue is empty
+                    break;
                 }
             }
-            SDL_EVENT_MOUSE_BUTTON_UP => {
-                match unsafe{event.button}.button as i32 {
-                    SDL_BUTTON_LEFT => {
-                        if should_exit_on_lmousebtn_release {
+            // handle event; if needed set render_in_this_iter = true
+            match event.event_type() {
+                SDL_EVENT_MOUSE_WHEEL => {
+                    if unsafe{event.wheel}.y != 0. {
+                        // if lmousebtn_pressed, use cur coords saved at start of mouse pan op
+                        if !lmousebtn_pressed {
+                            state.select_win_and_img_points_under_cursor();
+                        }
+                        state.view_zoom(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1});
+                        should_exit_on_lmousebtn_release = false;
+                        if !lmousebtn_pressed && state.view_equalize_outer_space {
+                            state.move_to_equalize_outer_space();
+                        }
+                        render_in_this_iter = true;
+                    }
+                }
+                SDL_EVENT_MOUSE_MOTION => {
+                    if lmousebtn_pressed {
+                        state.win_sel_x = unsafe{event.motion}.x;
+                        state.win_sel_y = unsafe{event.motion}.y;
+                        state.view_move_to_return_selected_img_point_to_selected_win_point();
+                        render_in_this_iter = true;
+                        should_exit_on_lmousebtn_release = false;
+                    }
+                }
+                // TODO type mismatch: SDL_Event.button.button is u8 but SDL_BUTTON_* constants are i32
+                // also it's not allowed to use `as` (arbitrary expressions in general) in match patterns
+                SDL_EVENT_MOUSE_BUTTON_DOWN => {
+                    match unsafe{event.button}.button as i32 {
+                        SDL_BUTTON_LEFT => {
+                            lmousebtn_pressed = true;
+                            state.select_win_and_img_points_under_cursor();
+                            should_exit_on_lmousebtn_release = true;
+                        }
+                        SDL_BUTTON_RIGHT => {
+                            unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), CONTEXT_MENU_MSG.as_ptr(), state.window.as_ptr());}
+                        }
+                        _ => {}
+                    }
+                }
+                SDL_EVENT_MOUSE_BUTTON_UP => {
+                    match unsafe{event.button}.button as i32 {
+                        SDL_BUTTON_LEFT => {
+                            if should_exit_on_lmousebtn_release {
+                                if state.show_exit_expl {
+                                    state.show_exit_expl = false;
+                                    unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), EXIT_EXPL_MSG.as_ptr(), state.window.as_ptr());}
+                                } else {
+                                    exit(0);
+                                }
+                            }
+                            lmousebtn_pressed = false;
+                            if state.view_equalize_outer_space {
+                                state.move_to_equalize_outer_space();
+                                render_in_this_iter = true;
+                            }
+                        }
+                        SDL_BUTTON_MIDDLE => {
+                            state.set_win_fullscreen(!state.win_fullscreen);
+                            render_in_this_iter = true;
+                        }
+                        _ => {}
+                    }
+                }
+                SDL_EVENT_KEY_DOWN => {
+                    //eprintln!{"key scancode: {}", unsafe{event.key}.scancode);}
+                    match unsafe{event.key}.scancode {
+                        SDL_SCANCODE_E => {
+                            // toggle equalize outer space
+                            state.view_equalize_outer_space = !state.view_equalize_outer_space;
+                            if !lmousebtn_pressed && state.view_equalize_outer_space {
+                                state.move_to_equalize_outer_space();
+                                render_in_this_iter = true;
+                            }
+                        }
+                        SDL_SCANCODE_F |
+                        SDL_SCANCODE_F11 => {
+                            // toggle fullscreen
+                            state.set_win_fullscreen(!state.win_fullscreen);
+                            render_in_this_iter = true;
+                        }
+                        SDL_SCANCODE_L => {
+                            // rotate counter clockwise
+                            state.view_rotate_angle_q = (state.view_rotate_angle_q + (if state.view_mirror {1} else {3})) % 4;
+                            if !lmousebtn_pressed && state.view_equalize_outer_space {
+                                state.move_to_equalize_outer_space();
+                            }
+                            render_in_this_iter = true;
+                        }
+                        SDL_SCANCODE_M => {
+                            // mirror horizontally
+                            state.view_mirror = !state.view_mirror;
+                            render_in_this_iter = true;
+                        }
+                        SDL_SCANCODE_Q |
+                        SDL_SCANCODE_ESCAPE => {
+                            // quit
+                            exit(0);
+                        }
+                        SDL_SCANCODE_R => {
+                            // rotate clockwise
+                            state.view_rotate_angle_q = (state.view_rotate_angle_q + (if state.view_mirror {3} else {1})) % 4;
+                            if !lmousebtn_pressed && state.view_equalize_outer_space {
+                                state.move_to_equalize_outer_space();
+                            }
+                            render_in_this_iter = true;
+                        }
+                        SDL_SCANCODE_S => {
+                            // switch scalemode
+                            state.view_zoom_scalemode = if state.view_zoom_scalemode==SDL_SCALEMODE_NEAREST {SDL_SCALEMODE_LINEAR} else {SDL_SCALEMODE_NEAREST};
+                            for frame in &state.anim_frames {
+                                if !unsafe{SDL_SetTextureScaleMode(frame.texture.as_ptr(), state.view_zoom_scalemode)} {
+                                    unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
+                                    exit(1);
+                                }
+                            }
+                            render_in_this_iter = true;
+                        }
+                        SDL_SCANCODE_0 |
+                        SDL_SCANCODE_KP_0 => {
+                            // zoom 1:1
+                            if lmousebtn_pressed {
+                                should_exit_on_lmousebtn_release = false;
+                            } else {
+                                state.select_win_and_img_points_in_center();
+                            }
+                            state.view_zoom(0);
+                            if !lmousebtn_pressed && state.view_equalize_outer_space {
+                                state.move_to_equalize_outer_space();
+                            }
+                            render_in_this_iter = true;
+                        }
+                        SDL_SCANCODE_RETURN |
+                        SDL_SCANCODE_KP_ENTER => {
+                            // quit
                             if state.show_exit_expl {
                                 state.show_exit_expl = false;
                                 unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), EXIT_EXPL_MSG.as_ptr(), state.window.as_ptr());}
@@ -912,171 +1009,109 @@ fn main() {
                                 exit(0);
                             }
                         }
-                        lmousebtn_pressed = false;
-                        if state.view_equalize_outer_space {
-                            state.move_to_equalize_outer_space();
-                            state.render_window();
-                        }
-                    }
-                    SDL_BUTTON_MIDDLE => {
-                        state.set_win_fullscreen(!state.win_fullscreen);
-                        state.render_window();
-                    }
-                    _ => {}
-                }
-            }
-            SDL_EVENT_KEY_DOWN => {
-                //eprintln!{"key scancode: {}", unsafe{event.key}.scancode);}
-                match unsafe{event.key}.scancode {
-                    SDL_SCANCODE_E => {
-                        // toggle equalize outer space
-                        state.view_equalize_outer_space = !state.view_equalize_outer_space;
-                        if state.view_equalize_outer_space {
-                            state.move_to_equalize_outer_space();
-                            state.render_window();
-                        }
-                    }
-                    SDL_SCANCODE_F |
-                    SDL_SCANCODE_F11 => {
-                        // toggle fullscreen
-                        state.set_win_fullscreen(!state.win_fullscreen);
-                        state.render_window();
-                    }
-                    SDL_SCANCODE_L => {
-                        // rotate counter clockwise
-                        state.view_rotate_angle_q = (state.view_rotate_angle_q + (if state.view_mirror {1} else {3})) % 4;
-                        if state.view_equalize_outer_space {
-                            state.move_to_equalize_outer_space();
-                        }
-                        state.render_window();
-                    }
-                    SDL_SCANCODE_M => {
-                        // mirror horizontally
-                        state.view_mirror = !state.view_mirror;
-                        state.render_window();
-                    }
-                    SDL_SCANCODE_Q |
-                    SDL_SCANCODE_ESCAPE => {
-                        // quit
-                        exit(0);
-                    }
-                    SDL_SCANCODE_R => {
-                        // rotate clockwise
-                        state.view_rotate_angle_q = (state.view_rotate_angle_q + (if state.view_mirror {3} else {1})) % 4;
-                        if state.view_equalize_outer_space {
-                            state.move_to_equalize_outer_space();
-                        }
-                        state.render_window();
-                    }
-                    SDL_SCANCODE_S => {
-                        // switch scalemode
-                        state.view_zoom_scalemode = if state.view_zoom_scalemode==SDL_SCALEMODE_NEAREST {SDL_SCALEMODE_LINEAR} else {SDL_SCALEMODE_NEAREST};
-                        for frame in &state.anim_frames {
-                            if !unsafe{SDL_SetTextureScaleMode(frame.texture.as_ptr(), state.view_zoom_scalemode)} {
-                                unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
-                                exit(1);
+                        SDL_SCANCODE_SPACE => {
+                            // toggle animation playback
+                            if !state.anim_paused {
+                                state.anim_paused_time = unsafe{SDL_GetTicks()};
+                            } else {
+                                state.anim_next_frame_time += unsafe{SDL_GetTicks()} - state.anim_paused_time;
                             }
+                            state.anim_paused = !state.anim_paused;
                         }
-                        state.render_window();
-                    }
-                    SDL_SCANCODE_0 |
-                    SDL_SCANCODE_KP_0 => {
-                        // zoom 1:1
-                        // TODO ugly equalize_outer_space switching
-                        let view_equalize_outer_space_saved = state.view_equalize_outer_space;
-                        if lmousebtn_pressed {
-                            should_exit_on_lmousebtn_release = false;
-                            state.view_equalize_outer_space = false;
-                        } else {
-                            state.select_win_and_img_points_in_center();
+                        SDL_SCANCODE_MINUS |
+                        SDL_SCANCODE_KP_MINUS => {
+                            // zoom out
+                            if lmousebtn_pressed {
+                                should_exit_on_lmousebtn_release = false;
+                            } else {
+                                state.select_win_and_img_points_in_center();
+                            }
+                            state.view_zoom(state.view_zoom_level-1);
+                            if !lmousebtn_pressed && state.view_equalize_outer_space {
+                                state.move_to_equalize_outer_space();
+                            }
+                            render_in_this_iter = true;
                         }
-                        state.view_zoom(0);
-                        state.view_equalize_outer_space = view_equalize_outer_space_saved;
-                    }
-                    SDL_SCANCODE_RETURN |
-                    SDL_SCANCODE_KP_ENTER => {
-                        // quit
-                        if state.show_exit_expl {
-                            state.show_exit_expl = false;
-                            unsafe{SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags(0), APP_NAME.as_ptr(), EXIT_EXPL_MSG.as_ptr(), state.window.as_ptr());}
-                        } else {
-                            exit(0);
+                        SDL_SCANCODE_EQUALS |
+                        SDL_SCANCODE_KP_PLUS => {
+                            // zoom in
+                            if lmousebtn_pressed {
+                                should_exit_on_lmousebtn_release = false;
+                            } else {
+                                state.select_win_and_img_points_in_center();
+                            }
+                            state.view_zoom(state.view_zoom_level+1);
+                            if !lmousebtn_pressed && state.view_equalize_outer_space {
+                                state.move_to_equalize_outer_space();
+                            }
+                            render_in_this_iter = true;
                         }
-                    }
-                    SDL_SCANCODE_SPACE => {
-                        // toggle animation playback
-                        if !state.anim_paused {
-                            state.anim_paused_time = unsafe{SDL_GetTicks()};
-                        } else {
-                            state.anim_next_frame_time += unsafe{SDL_GetTicks()} - state.anim_paused_time;
+                        // load image calls render_window() immediately
+                        SDL_SCANCODE_PAGEUP |
+                        SDL_SCANCODE_KP_9 => {
+                            // prev
+                            state.load_next_image(true);
+                            render_in_prev_iter = true;
+                            render_in_this_iter = false;
                         }
-                        state.anim_paused = !state.anim_paused;
-                    }
-                    SDL_SCANCODE_MINUS |
-                    SDL_SCANCODE_KP_MINUS => {
-                        // zoom out
-                        // TODO ugly equalize_outer_space switching
-                        let view_equalize_outer_space_saved = state.view_equalize_outer_space;
-                        if lmousebtn_pressed {
-                            should_exit_on_lmousebtn_release = false;
-                            state.view_equalize_outer_space = false;
-                        } else {
-                            state.select_win_and_img_points_in_center();
+                        SDL_SCANCODE_PAGEDOWN |
+                        SDL_SCANCODE_KP_3 => {
+                            // next
+                            state.load_next_image(false);
+                            render_in_prev_iter = true;
+                            render_in_this_iter = false;
                         }
-                        state.view_zoom(state.view_zoom_level-1);
-                        state.view_equalize_outer_space = view_equalize_outer_space_saved;
-                    }
-                    SDL_SCANCODE_EQUALS |
-                    SDL_SCANCODE_KP_PLUS => {
-                        // zoom in
-                        // TODO ugly equalize_outer_space switching
-                        let view_equalize_outer_space_saved = state.view_equalize_outer_space;
-                        if lmousebtn_pressed {
-                            should_exit_on_lmousebtn_release = false;
-                            state.view_equalize_outer_space = false;
-                        } else {
-                            state.select_win_and_img_points_in_center();
+                        SDL_SCANCODE_RIGHT |
+                        SDL_SCANCODE_KP_6 => {
+                            // move right
+                            state.view_move_by_offset(-KEYBOARD_PAN_DELTA, 0.);
+                            render_in_this_iter = true;
                         }
-                        state.view_zoom(state.view_zoom_level+1);
-                        state.view_equalize_outer_space = view_equalize_outer_space_saved;
+                        SDL_SCANCODE_LEFT |
+                        SDL_SCANCODE_KP_4 => {
+                            // move left
+                            state.view_move_by_offset(KEYBOARD_PAN_DELTA, 0.);
+                            render_in_this_iter = true;
+                        }
+                        SDL_SCANCODE_DOWN |
+                        SDL_SCANCODE_KP_2 => {
+                            // move down
+                            state.view_move_by_offset(0., -KEYBOARD_PAN_DELTA);
+                            render_in_this_iter = true;
+                        }
+                        SDL_SCANCODE_UP |
+                        SDL_SCANCODE_KP_8 => {
+                            // move up
+                            state.view_move_by_offset(0., KEYBOARD_PAN_DELTA);
+                            render_in_this_iter = true;
+                        }
+                        _ => {}
                     }
-                    SDL_SCANCODE_PAGEUP |
-                    SDL_SCANCODE_KP_9 => {
-                        // prev
-                        state.load_next_image(true);
-                    }
-                    SDL_SCANCODE_PAGEDOWN |
-                    SDL_SCANCODE_KP_3 => {
-                        // next
-                        state.load_next_image(false);
-                    }
-                    SDL_SCANCODE_RIGHT |
-                    SDL_SCANCODE_KP_6 => {
-                        // move right
-                        state.view_move_by_offset(-KEYBOARD_PAN_DELTA, 0.);
-                    }
-                    SDL_SCANCODE_LEFT |
-                    SDL_SCANCODE_KP_4 => {
-                        // move left
-                        state.view_move_by_offset(KEYBOARD_PAN_DELTA, 0.);
-                    }
-                    SDL_SCANCODE_DOWN |
-                    SDL_SCANCODE_KP_2 => {
-                        // move down
-                        state.view_move_by_offset(0., -KEYBOARD_PAN_DELTA);
-                    }
-                    SDL_SCANCODE_UP |
-                    SDL_SCANCODE_KP_8 => {
-                        // move up
-                        state.view_move_by_offset(0., KEYBOARD_PAN_DELTA);
-                    }
-                    _ => {}
                 }
+                SDL_EVENT_QUIT => {
+                    exit(0);
+                }
+                _ => {}
             }
-            SDL_EVENT_QUIT => {
-                exit(0);
+            if !render_in_prev_iter {
+                // event queue is empty
+                break;
             }
-            _ => {}
+
         }
+        // also switch to next anim frame if needed
+        if anim_playback && state.anim_next_frame_time < now {
+            while state.anim_next_frame_time < now {
+                state.anim_cur = (state.anim_cur + 1) % state.anim_frames.len();
+                state.anim_next_frame_time += state.anim_frames[state.anim_cur].delay;
+            }
+            render_in_this_iter = true;
+        }
+        if render_in_this_iter {
+            state.render_window(); // blocks/pauses loop until frame is displayed
+        }
+        // for next iteration
+        render_in_prev_iter = render_in_this_iter;
+        render_in_this_iter = false;
     }
 }
