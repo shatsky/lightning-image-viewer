@@ -624,11 +624,6 @@ impl State {
         self.img_sel_y = (self.win_sel_y - self.view_rect.y) / self.view_zoom_scale;
     }
 
-    fn select_win_and_img_points_under_cursor(&mut self) {
-        unsafe{SDL_GetMouseState(&mut self.win_sel_x, &mut self.win_sel_y);}
-        self.select_img_point_at_selected_win_point();
-    }
-
     fn select_win_and_img_points_in_center(&mut self) {
         self.win_sel_x = self.win_w as f32 / 2.;
         self.win_sel_y = self.win_h as f32 / 2.;
@@ -843,7 +838,9 @@ fn main() {
                     if unsafe{event.wheel}.y != 0. {
                         // if lmousebtn_pressed, use cur coords saved at start of mouse pan op
                         if !lmousebtn_pressed {
-                            state.select_win_and_img_points_under_cursor();
+                            state.win_sel_x = unsafe{event.wheel}.mouse_x;
+                            state.win_sel_y = unsafe{event.wheel}.mouse_y;
+                            state.select_img_point_at_selected_win_point();
                         }
                         state.view_zoom(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1});
                         should_exit_on_lmousebtn_release = false;
@@ -868,7 +865,9 @@ fn main() {
                     match unsafe{event.button}.button as i32 {
                         SDL_BUTTON_LEFT => {
                             lmousebtn_pressed = true;
-                            state.select_win_and_img_points_under_cursor();
+                            state.win_sel_x = unsafe{event.button}.x;
+                            state.win_sel_y = unsafe{event.button}.y;
+                            state.select_img_point_at_selected_win_point();
                             should_exit_on_lmousebtn_release = true;
                         }
                         SDL_BUTTON_RIGHT => {
