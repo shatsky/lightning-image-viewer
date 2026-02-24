@@ -835,14 +835,14 @@ fn main() {
         while unsafe{SDL_PollEvent(&mut event)} {
             match event.event_type() {
                 SDL_EVENT_MOUSE_WHEEL => {
-                    if unsafe{event.wheel}.y != 0. {
+                    if unsafe{event.wheel}.integer_y != 0 {
                         // if lmousebtn_pressed, use cur coords saved at start of mouse pan op
                         if !lmousebtn_pressed {
                             state.win_sel_x = unsafe{event.wheel}.mouse_x;
                             state.win_sel_y = unsafe{event.wheel}.mouse_y;
                             state.select_img_point_at_selected_win_point();
                         }
-                        state.view_zoom(if unsafe{event.wheel}.y>0. {state.view_zoom_level+1} else {state.view_zoom_level-1});
+                        state.view_zoom(if unsafe{event.wheel}.integer_y>0 {state.view_zoom_level+1} else {state.view_zoom_level-1});
                         should_exit_on_lmousebtn_release = false;
                         if !lmousebtn_pressed && state.view_equalize_outer_space {
                             state.move_to_equalize_outer_space();
