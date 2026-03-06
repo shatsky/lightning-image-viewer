@@ -57,7 +57,8 @@ image files from file manager to use it as intended.";
 // design notes
 // - state obj holds (most of) persistent state incl. view_rect which defines current image size and position on display
 // - event&rendering loop in main(); first, events are handled (in nested loop which can wait if event queue is empty or run multiple times if there are multiple events in queue), then the animation clock; if during handling something has set render flag, rendering happens; however, image load (initial or prev/next switch) currently causes immediate rendering via view_reset (before all view_* functions caused immediate rendering)
-// - both still and anim images are treated as vec of frames; still image vec has single frame with delay=0; anim playback code in event&rendering loop is skipped if vec len<2 or anim_paused
+// - both still and anim images are treated as vec of frames; still image vec has single frame; anim playback code in event&rendering loop is skipped if vec len<2 or anim_paused
+// - image decoding is split from state into "decode state" obj with decode functions which operate on it; to allow decode in bg thread, begin it immediately (state instantiation in main thread creates window and renderer, causing delay) and share decode state with main thread
 // - if orientation (rotate and mirror) metadata is provided by decoder, pixmap is not rotated in mem but loaded to texture as is; orientation metadata is used to set initial orientation state values, which are used in rendering call in render_window(); view_rect is not rotated as per orientation state, too; SDL renderer takes non rotated rect with separate rotation angle arg and renders texture rotated
 // - view_rect is copied in render_window() and copy is adjusted (pos coords floored to align to display pixels) and used for rendering call
 // - for view transforming ops which preserve certain image point pos (under cursor or in center), win and img coords of "selected point" are saved in state, then used to move view_rect pos to align img selected point to win selected point
@@ -68,7 +69,7 @@ image files from file manager to use it as intended.";
 // - SDL_CreateTextureFromSurface and SDL_SetWindowTitle don't need surface and str after call, ok to drop immediately
 // - I prefer explicit SDL event&rendering loop
 
-// TODO print errors provided in Result enums when loading image, incl. partial anim load
+// TODO print errors provided in Result enums when loading image, incl. partial anim load, GUI err msgs?
 // TODO atomic image view state, in image_load() create new and replace/switch upon success, loaded_images vec for cache/preload?
 // TODO don't drag or zoom if cursor out of view_rect?
 // TODO scale/position limits/constraints?
@@ -77,12 +78,150 @@ image files from file manager to use it as intended.";
 // TODO add macro to "call function, check return val, log err and exit in case of failure" for bool SDL functions which return false in case of failure and set err
 // TODO store coords and dimensions as tuples? Vec2 with math operations impl?
 // TODO transform matrix instead of scale, view_rect and orientation? view_rect seems more practical for now
+// TODO Rust/image-rs and C/SDL types; c_int = i32, c_float = f32? https://doc.rust-lang.org/beta/core/ffi/index.html
 
-// TODO image-rs and SDL types
+// image decoding
+// image decoding is split from monolithic (main) app state to allow decoding in bg thread immediately while window&renderer are being initialized/while event loop runs
+// image decoding only does part which doesn't need renderer; it produces DecodeState obj with pixel data buffer(s) which is then used to load to textures, which needs renderer and happens in main thread
+// image decoding is split into several functions primarily because of image-rs lack of generic animation decoding API, requiring to compose execution flow differently for different formats
+// image decoding functions are not decode state methods, they operate on decode state obj to allow sharing it between threads
+// TODO std::sync::Arc<std::sync::Mutex<DecodeState>> (or mpsc channel?) to allow picking data from decoding thread while it is decoding; for now there is simplest inter thread comm "send (file path) upon spawn, get (decode state) upon join"; it's enough to allow app to decode 1st file simultanously with instantiating window and renderer and to decode subsequent files simultaneously with running event loop
+// TODO persistent decoding thread with own main loop?
+// error handling and reporting
+// only terminate upon failure of functions which shouldn't fail because of invalid image file
+// only print non-terminal errs for initial file; when switching prev/next, decoding of many non-image files may be attempted
+// file_load_initial: flag used to print decoding err msgs only for initial file
+
+struct DecodeState {
+    dimensions: (u32, u32),
+    orientation: image::metadata::Orientation,
+    frames: std::collections::VecDeque<image::Frame>,
+}
+
+fn new_decode_state() -> DecodeState {
+    DecodeState {
+        dimensions: (0, 0),
+        orientation: image::metadata::Orientation::NoTransforms,
+        frames: std::collections::VecDeque::<image::Frame>::new(),
+    }
+}
+
+fn decode_image_metadata(decode_state: &mut DecodeState, decoder: &mut impl image::ImageDecoder) {
+    // TODO image/frame dimensions can be obtained on several steps of pipeline; should be consistent, but what if not? For now, I use dimensions from ImageDecoder for state fields here, and dimensions from ImageBuffer for SDL_CreateSurfaceFrom() args when decoding frames; might be better to update state fields with every frame if frame dimensions are greater than state fields values; to account for something like those broken videos sticking out of initial frame rect
+    decode_state.dimensions = decoder.dimensions();
+    decode_state.orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+}
+
+fn decode_image_anim<'a>(decode_state: &mut DecodeState, decoder: impl image::AnimationDecoder<'a>, file_load_initial: bool) {
+    let frames = decoder.into_frames();
+    for frame in frames {
+        let Ok(frame) = frame else {
+            if file_load_initial {
+                eprintln!("failed to get image frame from decoder");
+            }
+            break;
+        };
+        let (_delay_numer_ms, delay_denom_ms) = frame.delay().numer_denom_ms();
+        if delay_denom_ms == 0 {
+            if file_load_initial {
+                eprintln!("bad image frame delay");
+            }
+            break;
+        }
+        decode_state.frames.push_back(frame);
+    }
+}
+
+fn decode_image_still(decode_state: &mut DecodeState, decoder: impl image::ImageDecoder, file_load_initial: bool) {
+    let Ok(image_) = image::DynamicImage::from_decoder(decoder) else {
+        if file_load_initial {
+            eprintln!("failed to get image frame from decoder");
+        }
+        return;
+    };
+    decode_state.frames.push_back(image::Frame::new(image_.to_rgba8()));
+}
+
+fn decode_image(file_load_path: &std::ffi::OsStr, file_load_initial: bool) -> DecodeState {
+    let mut decode_state = new_decode_state();
+
+    let Ok(file) = std::fs::File::open(file_load_path) else {
+        if file_load_initial {
+            eprintln!("failed to open file");
+        }
+        return decode_state;
+    };
+    let Ok(reader) = image::ImageReader::new(std::io::BufReader::new(file)).with_guessed_format() else {
+        if file_load_initial {
+            eprintln!("failed to get reader from file object");
+        }
+        return decode_state;
+    };
+    match reader.format() {
+        // TODO check format like it is checked inside lib when choosing decoder
+        Some(image::ImageFormat::Gif) => {
+            let Ok(mut decoder) = image::codecs::gif::GifDecoder::new(reader.into_inner()) else {
+                if file_load_initial {
+                    eprintln!("failed to get decoder from reader");
+                }
+                return decode_state;
+            };
+            decode_image_metadata(&mut decode_state, &mut decoder);
+            decode_image_anim(&mut decode_state, decoder, file_load_initial);
+        },
+        Some(image::ImageFormat::WebP) => {
+            let Ok(mut decoder) = image::codecs::webp::WebPDecoder::new(reader.into_inner()) else {
+                if file_load_initial {
+                    eprintln!("failed to get decoder from reader");
+                }
+                return decode_state;
+            };
+            decode_image_metadata(&mut decode_state, &mut decoder);
+            if decoder.has_animation() {
+                decode_image_anim(&mut decode_state, decoder, file_load_initial);
+            } else {
+                decode_image_still(&mut decode_state, decoder, file_load_initial);
+            }
+        },
+        Some(image::ImageFormat::Png) => {
+            let Ok(mut decoder) = image::codecs::png::PngDecoder::new(reader.into_inner()) else {
+                if file_load_initial {
+                    eprintln!("failed to get decoder from reader");
+                }
+                return decode_state;
+            };
+            decode_image_metadata(&mut decode_state, &mut decoder);
+            if decoder.is_apng().unwrap_or(false) {
+                let Ok(decoder) = decoder.apng() else {
+                    if file_load_initial {
+                        eprintln!("failed to get decoder adapter from decoder");
+                    }
+                    return decode_state;
+                };
+                decode_image_anim(&mut decode_state, decoder, file_load_initial);
+            } else {
+                decode_image_still(&mut decode_state, decoder, file_load_initial);
+            }
+        },
+        // for all other formats: reader.into_decoder() returns decoder of opaque type `impl ImageDecoder + '_`; actually internally it's Box<ImageDecoder>
+        _ => {
+            let Ok(mut decoder) = reader.into_decoder() else {
+                if file_load_initial {
+                    eprintln!("failed to get decoder from reader");
+                }
+                return decode_state;
+            };
+            decode_image_metadata(&mut decode_state, &mut decoder);
+            decode_image_still(&mut decode_state, decoder, file_load_initial);
+        }
+    };
+    return decode_state;
+}
+
 struct Frame {
     // SDL_Surface represents pixmap which is owned by process (in RAM), used for software manipulation and rendering
     // SDL_Texture represents "texture" entity owned by GPU driver (usually in VRAM), used for hardware accelerated rendering
-    // image file is first decoded to buffer which is passed to SDL_CreateSurfaceFrom() to get SDL_Surface, which is then used to upload it to GPU and get SDL_Texture via SDL_CreateTextureFromSurface(), before freeing SDL_Surface and buffer
+    // decoded image buf is passed to SDL_CreateSurfaceFrom() to wrap it in tmp non-owning SDL_Surface, which is then used to upload it to GPU and get SDL_Texture via SDL_CreateTextureFromSurface(), before freeing SDL_Surface and buf
     texture: std::ptr::NonNull<SDL_Texture>,
     //width: i32,
     //height: i32,
@@ -97,7 +236,6 @@ impl Drop for Frame {
     }
 }
 
-// TODO c_int = i32, c_float = f32? https://doc.rust-lang.org/beta/core/ffi/index.html
 struct State {
     show_exit_expl: bool, // need to show explain msg on left click or Enter instead of exit
     file_load_path: std::ffi::OsString,
@@ -255,49 +393,6 @@ extern "C" fn file_dialog_callback(userdata: *mut std::ffi::c_void, filelist: *c
 }
 
 impl State {
-    // set initial orientation, called upon loading image
-    fn set_init_orient(&mut self, exif_orientation: u8) {
-        match exif_orientation {
-            // TODO expression? Declare array and select from it by index?
-            //1 => {
-            //    self.view_init_rotate_angle_q = 0;
-            //    self.view_init_mirror = false;
-            //}
-            2 => {
-                self.view_rotate_angle_q = 0;
-                self.view_mirror = true;
-            }
-            3 => {
-                self.view_rotate_angle_q = 2;
-                self.view_mirror = false;
-            }
-            4 => {
-                self.view_rotate_angle_q = 2;
-                self.view_mirror = true;
-            }
-            5 => {
-                self.view_rotate_angle_q = 1;
-                self.view_mirror = true;
-            }
-            6 => {
-                self.view_rotate_angle_q = 1;
-                self.view_mirror = false;
-            }
-            7 => {
-                self.view_rotate_angle_q = 3;
-                self.view_mirror = true;
-            }
-            8 => {
-                self.view_rotate_angle_q = 3;
-                self.view_mirror = false;
-            }
-            _ => {
-                self.view_rotate_angle_q = 0;
-                self.view_mirror = false;
-            }
-        }
-    }
-
     // non-redrawing, only update scale and view_rect size
     fn set_zoom_level(&mut self, view_zoom_level: i32) {
         self.view_zoom_level = view_zoom_level;
@@ -409,166 +504,95 @@ impl State {
         self.render_window();
     }
 
-    // image loading is split into several functions primarily because of image-rs lack of generic animation decoding API, requiring to compose execution flow differently for different formats
-    // only terminate upon failure of functions which shouldn't fail because of invalid image file
-    // only print non-terminal errs for initial file; when switching prev/next, loading of many non-image files may be attempted
-
-    fn load_image_metadata(&mut self, decoder: &mut impl image::ImageDecoder) {
-        // TODO image/frame dimensions can be obtained on several steps of pipeline; should be consistent, but what if not? For now, I use dimensions from ImageDecoder for state fields here, and dimensions from ImageBuffer for SDL_CreateSurfaceFrom() args when decoding frames; might be better to update state fields with every frame if frame dimensions are greater than state fields values; to account for something like those broken videos sticking out of initial frame rect
-        let (width, height) = decoder.dimensions();
-        self.img_w = width as i32;
-        self.img_h = height as i32;
-        let exif_orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms).to_exif();
-        self.set_init_orient(exif_orientation);
-    }
-
-    fn load_image_texture(&self, mut image_buffer: image::RgbaImage) -> *mut SDL_Texture {
-        let (width, height) = image_buffer.dimensions();
-        if width>i32::MAX as u32/4 || (height!=0 && width*4>i32::MAX as u32/height) || (width*height) as usize>image_buffer.len() {
-            if self.file_load_initial && self.anim_frames.len()==0 {
-                eprintln!("bad image dimensions or buffer length");
-            }
-            // TODO better way to handle?
-            return std::ptr::null_mut();
-        }
-        let surface_ptr: *mut SDL_Surface = unsafe{SDL_CreateSurfaceFrom(width as i32, height as i32, SDL_PIXELFORMAT_ABGR8888, image_buffer.as_mut_ptr() as *mut std::ffi::c_void, width as i32*4)};
-        if surface_ptr.is_null() {
-            unsafe{SDL_Log(c"SDL_CreateSurfaceFrom failed: %s".as_ptr(), SDL_GetError());}
-            exit(1);
-        }
-        // TODO can fail for very large image, shouldn't crash app, should inform user about limits
-        let texture_ptr: *mut SDL_Texture = unsafe{SDL_CreateTextureFromSurface(self.renderer.as_ptr(), surface_ptr)};
-        if texture_ptr.is_null() {
-            unsafe{SDL_Log(c"SDL_CreateTextureFromSurface failed: %s".as_ptr(), SDL_GetError());}
-            exit(1);
-        }
-        unsafe{SDL_DestroySurface(surface_ptr);}
-        if !unsafe{SDL_SetTextureScaleMode(texture_ptr, self.view_zoom_scalemode)} {
-            unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
-            exit(1);
-        }
-        return texture_ptr;
-    }
-
-    fn load_image_anim<'a>(&mut self, decoder: impl image::AnimationDecoder<'a>) {
-        let frames = decoder.into_frames();
-        for frame in frames {
-            let Ok(frame) = frame else {
-                if self.file_load_initial && self.anim_frames.len()==0 {
-                    eprintln!("failed to get image from decoder");
-                }
-                break;
-            };
-            let (delay_numer_ms, delay_denom_ms) = frame.delay().numer_denom_ms();
-            if delay_denom_ms == 0 {
-                if self.file_load_initial && self.anim_frames.len()==0 {
-                    eprintln!("bad image frame delay");
-                }
-                break;
-            }
-            let Some(texture) = std::ptr::NonNull::<SDL_Texture>::new(self.load_image_texture(frame.into_buffer())) else {break;};
-            self.anim_frames.push(Frame {
-                texture: texture,
-                delay: (delay_numer_ms / delay_denom_ms) as u64
-            });
-        }
-    }
-
-    fn load_image_still(&mut self, decoder: impl image::ImageDecoder) {
-        let Ok(image_) = image::DynamicImage::from_decoder(decoder) else {
-            if self.file_load_initial {
-                eprintln!("failed to get image from decoder");
-            }
-            return;
-        };
-        let Some(texture) = std::ptr::NonNull::<SDL_Texture>::new(self.load_image_texture(image_.to_rgba8())) else {return;};
-        self.anim_frames.push(Frame {
-            texture: texture,
-            delay: 0
-        });
-    }
-
-    // load image from current file_load_path
-    fn load_image(&mut self) {
+    // load decoded image
+    fn load_image(&mut self, mut decode_state: DecodeState) {
         self.file_load_success = false;
 
         // free previous if loaded
-        // after this we can't render until we load an image again; should be ok for single threaded program in which code which calls load_image() does not pass control to event&rendering loop until image is loaded successfully
+        // after this we can't render until we load an image again; should be ok as long as control is returned to event&rendering loop only if image is loaded successfully
         self.anim_frames.clear();
 
-        let Ok(file) = std::fs::File::open(&self.file_load_path) else {
-            if self.file_load_initial {
-                eprintln!("failed to open file");
+        (self.img_w, self.img_h) = (decode_state.dimensions.0 as i32, decode_state.dimensions.1 as i32);
+        match decode_state.orientation {
+            // TODO expression? Declare array and select from it by index?
+            image::metadata::Orientation::NoTransforms => {
+                // EXIF 1
+                self.view_rotate_angle_q = 0;
+                self.view_mirror = false;
             }
-            return;
-        };
-        let Ok(reader) = image::ImageReader::new(std::io::BufReader::new(file)).with_guessed_format() else {
-            if self.file_load_initial {
-                eprintln!("failed to get reader from file object");
+            image::metadata::Orientation::FlipHorizontal => {
+                // EXIF 2
+                self.view_rotate_angle_q = 0;
+                self.view_mirror = true;
             }
-            return;
-        };
-        match reader.format() {
-            // TODO check format like it is checked inside lib when choosing decoder
-            Some(image::ImageFormat::Gif) => {
-                let Ok(mut decoder) = image::codecs::gif::GifDecoder::new(reader.into_inner()) else {
-                    if self.file_load_initial {
-                        eprintln!("failed to get decoder from reader");
-                    }
-                    return;
-                };
-                self.load_image_metadata(&mut decoder);
-                self.load_image_anim(decoder);
-            },
-            Some(image::ImageFormat::WebP) => {
-                let Ok(mut decoder) = image::codecs::webp::WebPDecoder::new(reader.into_inner()) else {
-                    if self.file_load_initial {
-                        eprintln!("failed to get decoder from reader");
-                    }
-                    return;
-                };
-                self.load_image_metadata(&mut decoder);
-                if decoder.has_animation() {
-                    self.load_image_anim(decoder);
-                } else {
-                    self.load_image_still(decoder);
+            image::metadata::Orientation::Rotate180 => {
+                // EXIF 3
+                self.view_rotate_angle_q = 2;
+                self.view_mirror = false;
+            }
+            image::metadata::Orientation::FlipVertical => {
+                // EXIF 4
+                self.view_rotate_angle_q = 2;
+                self.view_mirror = true;
+            }
+            image::metadata::Orientation::Rotate90FlipH => {
+                // EXIF 5
+                self.view_rotate_angle_q = 1;
+                self.view_mirror = true;
+            }
+            image::metadata::Orientation::Rotate90 => {
+                // EXIF 6
+                self.view_rotate_angle_q = 1;
+                self.view_mirror = false;
+            }
+            image::metadata::Orientation::Rotate270FlipH => {
+                // EXIF 7
+                self.view_rotate_angle_q = 3;
+                self.view_mirror = true;
+            }
+            image::metadata::Orientation::Rotate270 => {
+                // EXIF 8
+                self.view_rotate_angle_q = 3;
+                self.view_mirror = false;
+            }
+            //_ => {
+            //    self.view_rotate_angle_q = 0;
+            //    self.view_mirror = false;
+            //}
+        }
+        while let Some(mut frame) = decode_state.frames.pop_front() {
+            let (surface_width, surface_height) = frame.buffer().dimensions();
+            if surface_width>i32::MAX as u32/4 || (surface_height!=0 && surface_width*4>i32::MAX as u32/surface_height) || (surface_width*surface_height) as usize>frame.buffer().len() {
+                if self.file_load_initial {
+                    eprintln!("bad image frame dimensions or buffer length");
                 }
-            },
-            Some(image::ImageFormat::Png) => {
-                let Ok(mut decoder) = image::codecs::png::PngDecoder::new(reader.into_inner()) else {
-                    if self.file_load_initial {
-                        eprintln!("failed to get decoder from reader");
-                    }
-                    return;
-                };
-                self.load_image_metadata(&mut decoder);
-                if decoder.is_apng().unwrap_or(false) {
-                    let Ok(decoder) = decoder.apng() else {
-                        if self.file_load_initial {
-                            eprintln!("failed to get decoder adapter from decoder");
-                        }
-                        return;
-                    };
-                    self.load_image_anim(decoder);
-                } else {
-                    self.load_image_still(decoder);
-                }
-            },
-            // for all other formats: reader.into_decoder() returns decoder of opaque type `impl ImageDecoder + '_`; actually internally it's Box<ImageDecoder>
-            _ => {
-                let Ok(mut decoder) = reader.into_decoder() else {
-                    if self.file_load_initial {
-                        eprintln!("failed to get decoder from reader");
-                    }
-                    return;
-                };
-                self.load_image_metadata(&mut decoder);
-                self.load_image_still(decoder);
+                break;
             }
-        };
-        if self.anim_frames.len()==0 {
+            let surface_ptr: *mut SDL_Surface = unsafe{SDL_CreateSurfaceFrom(surface_width as i32, surface_height as i32, SDL_PIXELFORMAT_ABGR8888, frame.buffer_mut().as_mut_ptr() as *mut std::ffi::c_void, surface_width as i32*4)};
+            if surface_ptr.is_null() {
+                unsafe{SDL_Log(c"SDL_CreateSurfaceFrom failed: %s".as_ptr(), SDL_GetError());}
+                exit(1);
+            }
+            // TODO can fail for very large image, shouldn't crash app, should inform user about limits
+            let Some(texture) = std::ptr::NonNull::<SDL_Texture>::new(unsafe{SDL_CreateTextureFromSurface(self.renderer.as_ptr(), surface_ptr)}) else {
+                unsafe{SDL_Log(c"SDL_CreateTextureFromSurface failed: %s".as_ptr(), SDL_GetError());}
+                exit(1);
+            };
+            unsafe{SDL_DestroySurface(surface_ptr);}
+            if !unsafe{SDL_SetTextureScaleMode(texture.as_ptr(), self.view_zoom_scalemode)} {
+                unsafe{SDL_Log(c"SDL_SetTextureScaleMode failed: %s".as_ptr(), SDL_GetError());}
+                exit(1);
+            }
+            let (delay_numer_ms, delay_denom_ms) = frame.delay().numer_denom_ms();
+            self.anim_frames.push(Frame {
+                texture: texture,
+                delay: (delay_numer_ms / delay_denom_ms) as u64 // checked during decode
+            });
+
+        }
+        if self.anim_frames.len() == 0 {
             if self.file_load_initial {
-                eprintln!("got and tried to use decoder but failed to get any frames, check preceding messages");
+                eprintln!("failed to load any image frames");
             }
             return;
         }
@@ -768,12 +792,13 @@ impl State {
             // filelist is sorted by +mtime but UX/fn semantics assumes -mtime, therefore `!reverse`
             self.filelist_cur = (self.filelist_cur + (if !reverse {self.filelist.len() - 1} else {1})) % self.filelist.len();
             self.file_load_path = self.filelist[self.filelist_cur].clone();
-            self.load_image();
+            let decode_state = decode_image(&self.file_load_path, false);
+            self.load_image(decode_state);
             if self.file_load_success {
                 break;
-            }
+            } // TODO delete non-loadable images from filelist?
             if self.filelist_cur==filelist_cur_saved {
-                eprintln!("load_image failed; wrapped around filelist and failed to load any file");
+                eprintln!("wrapped around filelist and failed to load any file");
                 exit(1);
             }
         }
@@ -798,11 +823,22 @@ fn main() {
     #[cfg(feature = "libheif")]
     libheif_rs::integration::image::register_avif_decoding_hook();
 
-    let mut state = new_state();
-    // TODO #rust more elegant? `Some(existing_var) = expr else {...};` (destructure into existing var) seems impossible
-    match std::env::args_os().nth(1) {
-        Some(val) => state.file_load_path = val,
+    // TODO #rust more elegant?
+    // if file arg provided, begin decode in bg thread spawned immediately before instantiation of state which creates window and render (delay); otherwise, because open file dialog currently depends on state, instantate state and then decode using filepath from state
+    let mut state = match std::env::args_os().nth(1) {
+        Some(val) => {
+            let file_load_path = val.clone();
+            let decode_thread_handle = std::thread::spawn(move || {
+                decode_image(&file_load_path, true)
+            });
+            let mut state = new_state();
+            state.file_load_path = val; // also store in state for window title, etc.
+            let decode_state = decode_thread_handle.join().unwrap(); // panic if decode thread panics
+            state.load_image(decode_state);
+            state
+        }
         None => {
+            let mut state = new_state();
             // 2-step cast because Rust does not allow cast ref to c_void ptr directly
             unsafe{SDL_ShowOpenFileDialog(Some(file_dialog_callback), &mut state as *mut _ as *mut std::ffi::c_void, state.window.as_ptr(), std::ptr::null(), 0, std::ptr::null(), false);}
             //unsafe{SDL_WaitSemaphore(state.file_dialog_semaphore.as_ptr());}
@@ -817,11 +853,14 @@ fn main() {
                 }
             }
             state.show_exit_expl = true;
+            // state.file_load_path set by file_dialog_callback
+            let decode_state = decode_image(&state.file_load_path, true);
+            state.load_image(decode_state);
+            state
         }
-    }
-    state.load_image();
+    };
     if !state.file_load_success {
-        eprintln!("load_image failed; failed to load initial file");
+        eprintln!("failed to load initial file");
         exit(1);
     }
     state.file_load_initial = false;
