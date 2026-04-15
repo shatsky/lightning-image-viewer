@@ -1106,7 +1106,14 @@ fn main() {
         if anim_playback && state.anim_next_frame_time < now {
             while state.anim_next_frame_time < now {
                 state.anim_cur = (state.anim_cur + 1) % state.anim_frames.len();
-                state.anim_next_frame_time += state.anim_frames[state.anim_cur].delay;
+                let mut anim_cur_frame_delay = state.anim_frames[state.anim_cur].delay;
+                // prevent issues if frames have delay 0
+                // firefox image/FrameTimeout.h `FromRawMilliseconds`
+                // seems to be de facto standard behaviour since IE times, what about non-GIF anims?
+                if anim_cur_frame_delay <= 10 {
+                    anim_cur_frame_delay = 100;
+                }
+                state.anim_next_frame_time += anim_cur_frame_delay;
             }
             render_needed = true;
         }
